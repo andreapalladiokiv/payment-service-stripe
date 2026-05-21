@@ -1,0 +1,51 @@
+{
+    "name": "techork/payment-service-stripe",
+    "description": "Stripe gateway implementation for payment services",
+    "type": "library",
+    "license": "proprietary",
+    "repositories": [
+        {
+            "type": "vcs",
+            "url": "git@github.com:andreapalladiokiv/payment-service-common.git"
+        },
+        {
+            "type": "vcs",
+            "url": "git@github.com:andreapalladiokiv/payment-service-gateway.git"
+        }
+    ],
+    "require": {
+        "php": "^8.4",
+        "stripe/stripe-php": "^20.0",
+        "techork/payment-service-common": "@dev",
+        "techork/payment-service-gateway": "@dev"
+    },
+    "require-dev": {
+        "mockery/mockery": "^1.6",
+        "pestphp/pest": "^3.0 || ^4.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "Techork\\PaymentService\\Stripe\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Techork\\PaymentService\\Tests\\": "tests/"
+        }
+    },
+    "extra": {
+        "laravel": {
+            "gateway": "Techork\\PaymentService\\Stripe\\StripeGateway",
+            "webhook": "Techork\\PaymentService\\Stripe\\Webhook\\StripeWebhookSubscriber"
+        }
+    },
+    "config": {
+        "sort-packages": true,
+        "allow-plugins": {
+            "pestphp/pest-plugin": true,
+            "php-http/discovery": true
+        }
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true
+}
