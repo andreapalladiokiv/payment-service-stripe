@@ -51,6 +51,22 @@ final class PurchaseRequest extends AbstractRequest implements PaymentInstrument
             $data['customer'] = $this->getCustomerReference();
         }
 
+        $statementDescription = $this->getStatementDescription();
+        if ($statementDescription !== null && $statementDescription !== '') {
+            $data['statement_descriptor'] = $statementDescription;
+        }
+
+        $description = $this->getDescription();
+        if ($description !== null && $description !== '') {
+            $data['description'] = $description;
+        }
+
+        $billingAddress = $this->getParameter('billingAddress');
+        $billingDetails = $this->formatBillingDetails($billingAddress);
+        if ($billingDetails !== null && isset($data['payment_method_data'])) {
+            $data['payment_method_data']['billing_details'] = $billingDetails;
+        }
+
         return $data;
     }
 
@@ -129,6 +145,14 @@ final class PurchaseRequest extends AbstractRequest implements PaymentInstrument
 
             if (isset($data['customer'])) {
                 $params['customer'] = $data['customer'];
+            }
+
+            if (isset($data['statement_descriptor'])) {
+                $params['statement_descriptor'] = $data['statement_descriptor'];
+            }
+
+            if (isset($data['description'])) {
+                $params['description'] = $data['description'];
             }
 
             if (isset($data['payment_method_data'])) {

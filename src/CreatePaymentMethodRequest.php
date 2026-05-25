@@ -10,6 +10,7 @@ use Stripe\Exception\ApiErrorException;
 use Stripe\StripeClient;
 use Techork\PaymentService\Common\Contract\PaymentInstrument;
 use Techork\PaymentService\Common\Contract\PaymentInstrumentVisitor;
+use Techork\PaymentService\Common\ValueObject\BillingAddress;
 use Techork\PaymentService\Common\ValueObject\Cash;
 use Techork\PaymentService\Common\ValueObject\CreditCard;
 use Techork\PaymentService\Common\ValueObject\HostedPayment;
@@ -33,8 +34,17 @@ final class CreatePaymentMethodRequest extends AbstractRequest implements Paymen
         /** @var PaymentInstrument $instrument */
         $instrument = $this->getParameter('instrument');
 
+        $paymentMethodData = $instrument->accept($this);
+
+        /** @var ?BillingAddress $billingAddress */
+        $billingAddress = $this->getParameter('billingAddress');
+        $billingDetails = $this->formatBillingDetails($billingAddress);
+        if ($billingDetails !== null && $billingDetails !== []) {
+            $paymentMethodData['billing_details'] = $billingDetails;
+        }
+
         return [
-            'payment_method_data' => $instrument->accept($this),
+            'payment_method_data' => $paymentMethodData,
             'customerReference' => $this->getCustomerReference(),
         ];
     }
@@ -82,33 +92,49 @@ final class CreatePaymentMethodRequest extends AbstractRequest implements Paymen
         try {
             $stripe = new StripeClient($this->getApiKey());
 
-            $params = [
+            $paymentMethod = $stripe->paymentMethods->create($data['payment_method_data'], $this->stripeOpts());
+
+            if ($data['customerReference'] !== '') {
+                $stripe->paymentMethods->attach($paymentMethod->id, ['customer' => $data['customerReference']]);
+            }
+
+            // Confirm via SetupIntent so Stripe runs AVS/CVC checks against the
+            // card and (when the PM is attached to a customer) saves it for
+            // off-session reuse. `requires_action` is acceptable here — the
+            // card itself is saved, and 3DS will be re-challenged at first
+            // charge. The PM is then re-retrieved to pick up the checks Stripe
+            // populates only after confirmation.
+            $setupParams = [
+                'payment_method' => $paymentMethod->id,
                 'confirm' => true,
-                'usage' => 'off_session',
-                'payment_method_data' => $data['payment_method_data'],
                 'automatic_payment_methods' => ['enabled' => true, 'allow_redirects' => 'never'],
-                'expand' => ['payment_method'],
             ];
 
             if ($data['customerReference'] !== '') {
-                $params['customer'] = $data['customerReference'];
+                $setupParams['customer'] = $data['customerReference'];
             }
 
-            $setupIntent = $stripe->setupIntents->create($params, $this->stripeOpts());
-
-            if ($setupIntent->status !== 'succeeded') {
-                return new CreatePaymentMethodResponse($this, [
-                    'reference' => null,
-                    'error' => "Setup Intent status: {$setupIntent->status}",
-                ]);
+            $threeDS = $this->getThreeDS();
+            if ($threeDS !== null) {
+                $setupParams['payment_method_options'] = [
+                    'card' => [
+                        'three_d_secure' => [
+                            'cryptogram' => $threeDS->authenticationValue,
+                            'transaction_id' => (string) $threeDS->dsTransactionId,
+                            'version' => $threeDS->version?->value,
+                            'ares_trans_status' => $threeDS->status->value,
+                            'electronic_commerce_indicator' => $threeDS->eci?->value,
+                        ],
+                    ],
+                ];
             }
 
-            $paymentMethod = $setupIntent->payment_method instanceof \Stripe\PaymentMethod
-                ? $setupIntent->payment_method
-                : null;
+            $stripe->setupIntents->create($setupParams, $this->stripeOpts());
+
+            $paymentMethod = $stripe->paymentMethods->retrieve($paymentMethod->id);
 
             return new CreatePaymentMethodResponse($this, [
-                'reference' => $paymentMethod?->id ?? $setupIntent->payment_method,
+                'reference' => $paymentMethod->id,
                 'error' => null,
                 ...$this->extractStripeChecks($paymentMethod),
             ]);

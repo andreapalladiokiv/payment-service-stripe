@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Techork\PaymentService\Stripe\Concern;
 
 use Money\Money;
+use Techork\PaymentService\Common\ValueObject\BillingAddress;
 
 trait StripeRequestParameters
 {
@@ -31,6 +32,42 @@ trait StripeRequestParameters
     public function setClientUniqueId(?string $value): self
     {
         return $this->setParameter('clientUniqueId', $value);
+    }
+
+    public function setStatementDescription(?string $value): self
+    {
+        return $this->setParameter('statementDescription', $value);
+    }
+
+    public function getStatementDescription(): ?string
+    {
+        return $this->getParameter('statementDescription');
+    }
+
+    protected function formatBillingDetails(?BillingAddress $address): ?array
+    {
+        if ($address === null) {
+            return null;
+        }
+
+        $name = trim($address->firstName.' '.$address->lastName);
+
+        $address1 = $address->line;
+        $address2 = $address->lineExtra !== '' ? $address->lineExtra : null;
+
+        return array_filter([
+            'name' => $name !== '' ? $name : null,
+            'email' => $address->email ? (string) $address->email : null,
+            'phone' => $address->phone ? (string) $address->phone : null,
+            'address' => array_filter([
+                'line1' => $address1,
+                'line2' => $address2,
+                'city' => $address->city,
+                'state' => $address->state ? (string) $address->state : null,
+                'postal_code' => $address->postalCode,
+                'country' => (string) $address->country,
+            ], static fn ($v) => $v !== null && $v !== ''),
+        ], static fn ($v) => $v !== null && $v !== '' && $v !== []);
     }
 
     /**

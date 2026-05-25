@@ -5,6 +5,7 @@ declare(strict_types=1);
 use Money\Currency;
 use Money\Money;
 use Techork\PaymentService\Common\Contract\DecryptInterface;
+use Techork\PaymentService\Common\Contract\EncryptInterface;
 use Techork\PaymentService\Common\ValueObject\BillingAddress;
 use Techork\PaymentService\Common\ValueObject\Country;
 use Techork\PaymentService\Common\ValueObject\CreditCard;
@@ -63,12 +64,12 @@ function fakeReferenceResolver(string $reference): GatewayInstrumentRepository
 function testCard(): CreditCard
 {
     return new CreditCard(
-        Number::fromNumber('4242424242424242', new class implements \Techork\PaymentService\Common\Contract\EncryptInterface {
+        Number::fromNumber('4242424242424242', new class implements EncryptInterface {
             public function encrypt(string $data): string { return $data; }
         }),
         Expiration::fromMonthAndYear(12, 2030),
         new Holder('Test User'),
-        Cvc::fromCvc('123', new class implements \Techork\PaymentService\Common\Contract\EncryptInterface {
+        Cvc::fromCvc('123', new class implements EncryptInterface {
             public function encrypt(string $data): string { return $data; }
         }),
     );
@@ -170,6 +171,30 @@ it('includes customer reference when provided', function () {
     $data = $request->getData();
 
     expect($data['customer'])->toBe('cus_abc');
+});
+
+it('includes statement_descriptor when statementDescription is set', function () {
+    $request = stripeGateway()->authorize([
+        'money' => new Money(5000, new Currency('USD')),
+        'instrument' => testCard(),
+        'gateway' => fakeCredential(),
+        'decrypter' => fakeDecrypter(),
+        'statementDescription' => 'ACME Trip 42',
+    ]);
+
+    expect($request->getData()['statement_descriptor'])->toBe('ACME Trip 42');
+});
+
+it('omits statement_descriptor when statementDescription is null or empty', function () {
+    $request = stripeGateway()->authorize([
+        'money' => new Money(5000, new Currency('USD')),
+        'instrument' => testCard(),
+        'gateway' => fakeCredential(),
+        'decrypter' => fakeDecrypter(),
+        'statementDescription' => '',
+    ]);
+
+    expect($request->getData())->not->toHaveKey('statement_descriptor');
 });
 
 it('throws on cash instrument', function () {

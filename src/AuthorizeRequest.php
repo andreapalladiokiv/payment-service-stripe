@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace Techork\PaymentService\Stripe;
 
+use Omnipay\Common\Http\ClientInterface;
+use Symfony\Component\HttpFoundation\Request as HttpRequest;
+use Techork\PaymentService\Common\ValueObject\Challenge\ThreeDSChallenge;
 use Techork\PaymentService\Gateway\Concern\InstrumentParameters;
 use Techork\PaymentService\Stripe\Concern\ExtractsCardChecks;
 use Techork\PaymentService\Stripe\Concern\StripeRequestParameters;
@@ -20,8 +23,6 @@ use Techork\PaymentService\Common\ValueObject\PaymentMethod;
 use Techork\PaymentService\Common\ValueObject\Token;
 use Stripe\Exception\ApiErrorException;
 use Stripe\StripeClient;
-use Techork\PaymentService\Common\ValueObject\ThreeDS\ThreeDSChallenge;
-use Techork\PaymentService\Common\ValueObject\ThreeDS\ThreeDSResult;
 
 final class AuthorizeRequest extends AbstractRequest implements PaymentInstrumentVisitor
 {
@@ -45,6 +46,22 @@ final class AuthorizeRequest extends AbstractRequest implements PaymentInstrumen
 
         if ($this->getCustomerReference() !== '') {
             $data['customer'] = $this->getCustomerReference();
+        }
+
+        $statementDescription = $this->getStatementDescription();
+        if ($statementDescription !== null && $statementDescription !== '') {
+            $data['statement_descriptor'] = $statementDescription;
+        }
+
+        $description = $this->getDescription();
+        if ($description !== null && $description !== '') {
+            $data['description'] = $description;
+        }
+
+        $billingAddress = $this->getParameter('billingAddress');
+        $billingDetails = $this->formatBillingDetails($billingAddress);
+        if ($billingDetails !== null && isset($data['payment_method_data'])) {
+            $data['payment_method_data']['billing_details'] = $billingDetails;
         }
 
         return $data;
@@ -121,6 +138,14 @@ final class AuthorizeRequest extends AbstractRequest implements PaymentInstrumen
 
             if (isset($data['customer'])) {
                 $params['customer'] = $data['customer'];
+            }
+
+            if (isset($data['statement_descriptor'])) {
+                $params['statement_descriptor'] = $data['statement_descriptor'];
+            }
+
+            if (isset($data['description'])) {
+                $params['description'] = $data['description'];
             }
 
             if (isset($data['payment_method_data'])) {

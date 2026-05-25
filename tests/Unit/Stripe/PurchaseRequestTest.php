@@ -172,6 +172,40 @@ it('stores threeDS parameter when provided', function () {
         ->and($data['payment_method_data']['type'])->toBe('card');
 });
 
+it('includes statement_descriptor when statementDescription is set', function () {
+    $enc = new class implements EncryptInterface
+    {
+        public function encrypt(string $d): string
+        {
+            return $d;
+        }
+    };
+    $dec = new class implements DecryptInterface
+    {
+        public function decrypt(string $d): string
+        {
+            return $d;
+        }
+    };
+
+    $card = new CreditCard(
+        Number::fromNumber('4242424242424242', $enc),
+        Expiration::fromMonthAndYear(12, 2030),
+        new Holder('Test'),
+        Cvc::fromCvc('123', $enc),
+    );
+
+    $request = purchaseStripeGateway()->purchase([
+        'money' => new Money(5000, new Currency('USD')),
+        'instrument' => $card,
+        'gateway' => purchaseCredential(),
+        'decrypter' => $dec,
+        'statementDescription' => 'ACME Trip 42',
+    ]);
+
+    expect($request->getData()['statement_descriptor'])->toBe('ACME Trip 42');
+});
+
 it('builds hosted-checkout marker data for HostedPayment instrument', function () {
     $hosted = new HostedPayment(
         successUrl: 'https://merchant.example/success',
