@@ -4,13 +4,15 @@ declare(strict_types=1);
 
 namespace Techork\PaymentService\Stripe;
 
+use Money\Money;
 use Omnipay\Common\Message\AbstractResponse;
 use Techork\PaymentService\Common\Contract\Challenge;
 use Techork\PaymentService\Common\ValueObject\CreditCard\CheckResult;
 use Techork\PaymentService\Gateway\Contract\CardChecksProvider;
 use Techork\PaymentService\Gateway\Contract\ChallengeProvider;
+use Techork\PaymentService\Gateway\Contract\ConvertedAmountProvider;
 
-class StripeResponse extends AbstractResponse implements CardChecksProvider, ChallengeProvider
+class StripeResponse extends AbstractResponse implements CardChecksProvider, ChallengeProvider, ConvertedAmountProvider
 {
     public function isSuccessful(): bool
     {
@@ -30,6 +32,11 @@ class StripeResponse extends AbstractResponse implements CardChecksProvider, Cha
     public function getChallenge(): ?Challenge
     {
         return $this->data['challenge'] ?? null;
+    }
+
+    public function getConvertedAmount(): ?Money
+    {
+        return $this->data['converted_amount'] ?? null;
     }
 
     public function getAddressLineCheck(): ?CheckResult

@@ -21,6 +21,7 @@ use Techork\PaymentService\Common\ValueObject\Token;
 use Techork\PaymentService\Gateway\Concern\InstrumentParameters;
 use Techork\PaymentService\Gateway\Contract\GatewayCredential;
 use Techork\PaymentService\Stripe\Concern\ExtractsCardChecks;
+use Techork\PaymentService\Stripe\Concern\ExtractsConvertedAmount;
 use Techork\PaymentService\Stripe\Concern\StripeRequestParameters;
 
 /**
@@ -30,6 +31,7 @@ use Techork\PaymentService\Stripe\Concern\StripeRequestParameters;
 final class PurchaseRequest extends AbstractRequest implements PaymentInstrumentVisitor
 {
     use ExtractsCardChecks;
+    use ExtractsConvertedAmount;
     use InstrumentParameters;
     use StripeRequestParameters;
 
@@ -140,7 +142,7 @@ final class PurchaseRequest extends AbstractRequest implements PaymentInstrument
                 'currency' => $data['currency'],
                 'confirm' => true,
                 'automatic_payment_methods' => ['enabled' => true, 'allow_redirects' => 'never'],
-                'expand' => ['payment_method'],
+                'expand' => ['payment_method', 'latest_charge.balance_transaction'],
             ];
 
             if (isset($data['customer'])) {
@@ -192,6 +194,7 @@ final class PurchaseRequest extends AbstractRequest implements PaymentInstrument
                 'reference' => $paymentIntent->id,
                 'challenge' => $challenge,
                 'error' => null,
+                'converted_amount' => $this->extractConvertedAmount($paymentIntent),
                 ...$this->extractStripeChecks($paymentIntent->payment_method instanceof \Stripe\PaymentMethod ? $paymentIntent->payment_method : null),
             ]);
         } catch (ApiErrorException $e) {

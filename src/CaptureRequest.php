@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Techork\PaymentService\Stripe;
 
+use Techork\PaymentService\Stripe\Concern\ExtractsConvertedAmount;
 use Techork\PaymentService\Stripe\Concern\StripeRequestParameters;
 use Money\Money;
 use Omnipay\Common\Message\AbstractRequest;
@@ -16,6 +17,7 @@ use Stripe\StripeClient;
  */
 final class CaptureRequest extends AbstractRequest
 {
+    use ExtractsConvertedAmount;
     use StripeRequestParameters;
 
     public function getData(): array
@@ -40,7 +42,9 @@ final class CaptureRequest extends AbstractRequest
         try {
             $stripe = new StripeClient($this->getApiKey());
 
-            $captureParams = [];
+            $captureParams = [
+                'expand' => ['latest_charge.balance_transaction'],
+            ];
             if (isset($data['amount'])) {
                 $captureParams['amount_to_capture'] = $data['amount'];
             }
@@ -50,6 +54,7 @@ final class CaptureRequest extends AbstractRequest
             return new CaptureResponse($this, [
                 'reference' => $paymentIntent->id,
                 'error' => null,
+                'converted_amount' => $this->extractConvertedAmount($paymentIntent),
             ]);
         } catch (ApiErrorException $e) {
             return new CaptureResponse($this, [

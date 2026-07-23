@@ -2,9 +2,12 @@
 
 declare(strict_types=1);
 
+use Money\Currency;
+use Money\Money;
 use Omnipay\Common\Message\RequestInterface;
 use Techork\PaymentService\Common\ValueObject\CreditCard\CheckResult;
 use Techork\PaymentService\Gateway\Contract\CardChecksProvider;
+use Techork\PaymentService\Gateway\Contract\ConvertedAmountProvider;
 use Techork\PaymentService\Stripe\StripeResponse;
 
 function makeStripeResponse(array $data): StripeResponse
@@ -47,4 +50,19 @@ it('treats Unchecked as a real signal (distinct from absence)', function () {
 
     expect($response->getAddressLineCheck())->toBe(CheckResult::Unchecked)
         ->and($response->getPostalCodeCheck())->toBeNull();
+});
+
+it('implements ConvertedAmountProvider', function () {
+    expect(makeStripeResponse([]))->toBeInstanceOf(ConvertedAmountProvider::class);
+});
+
+it('surfaces the FX-settled convertedAmount carried in data', function () {
+    $converted = new Money(5712, new Currency('USD'));
+    $response = makeStripeResponse(['reference' => 'pi_123', 'converted_amount' => $converted]);
+
+    expect($response->getConvertedAmount())->toBe($converted);
+});
+
+it('returns null convertedAmount when the key is absent', function () {
+    expect(makeStripeResponse(['reference' => 'pi_123'])->getConvertedAmount())->toBeNull();
 });
