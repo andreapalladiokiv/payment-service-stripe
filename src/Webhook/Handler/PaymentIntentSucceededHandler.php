@@ -11,6 +11,7 @@ use Techork\PaymentService\Gateway\Webhook\Recorder\GatewaySuccessRecorder;
 use Techork\PaymentService\Gateway\Webhook\Recorder\RecorderOutcome;
 use Money\Currency;
 use Money\Money;
+use RuntimeException;
 use Stripe\Event;
 use Techork\PaymentService\Gateway\ValueObject\GatewayId;
 
@@ -38,9 +39,16 @@ final readonly class PaymentIntentSucceededHandler implements WebhookEventHandle
             return HandlerOutcome::Delay;
         }
 
+        $currency = strtoupper((string) ($object->currency ?? ''));
+        if ($currency === '') {
+            throw new RuntimeException(
+                sprintf('Stripe payment_intent.succeeded %s names no currency; refusing to assume one.', $reference),
+            );
+        }
+
         $amount = new Money(
             (int) ($object->amount_received ?? $object->amount ?? 0),
-            new Currency(strtoupper((string) ($object->currency ?? 'USD'))),
+            new Currency($currency),
         );
 
         return match ($this->recorder->onGatewaySuccess($gatewayId, $paymentIntentId, $reference, $amount)) {

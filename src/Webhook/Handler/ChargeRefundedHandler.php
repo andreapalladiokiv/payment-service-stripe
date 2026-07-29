@@ -11,6 +11,7 @@ use Techork\PaymentService\Gateway\Webhook\Recorder\RecorderOutcome;
 use Techork\PaymentService\Gateway\Webhook\Recorder\RefundProcessingRecorder;
 use Money\Currency;
 use Money\Money;
+use RuntimeException;
 use Stripe\Event;
 use Techork\PaymentService\Gateway\ValueObject\GatewayId;
 
@@ -51,10 +52,14 @@ final readonly class ChargeRefundedHandler implements WebhookEventHandler
             return HandlerOutcome::Delay;
         }
 
-        $amount = new Money(
-            (int) ($refund->amount ?? 0),
-            new Currency(strtoupper((string) ($refund->currency ?? 'USD'))),
-        );
+        $currency = strtoupper((string) ($refund->currency ?? ''));
+        if ($currency === '') {
+            throw new RuntimeException(
+                sprintf('Stripe refund %s names no currency; refusing to assume one.', $refundReference),
+            );
+        }
+
+        $amount = new Money((int) ($refund->amount ?? 0), new Currency($currency));
 
         return match ($this->recorder->onRefundProcessed($gatewayId, $paymentIntentId, $refundReference, $amount)) {
             RecorderOutcome::Applied => HandlerOutcome::Processed,

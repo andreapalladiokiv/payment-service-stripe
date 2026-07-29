@@ -12,7 +12,7 @@ use Techork\PaymentService\Gateway\Webhook\Contract\TransactionIdResolver;
 use Techork\PaymentService\Gateway\Webhook\Recorder\RecorderOutcome;
 use Techork\PaymentService\Gateway\Webhook\Recorder\RefundProcessingRecorder;
 
-function chargeRefundedEvent(string $piReference = 'ch_123', string $refundReference = 're_abc', int $amount = 1000): object
+function chargeRefundedEvent(string $piReference = 'ch_123', string $refundReference = 're_abc', int $amount = 1000, string $currency = 'usd'): object
 {
     return Util::convertToStripeObject([
         'id' => 'evt_1',
@@ -27,12 +27,27 @@ function chargeRefundedEvent(string $piReference = 'ch_123', string $refundRefer
                     'id' => $refundReference,
                     'object' => 'refund',
                     'amount' => $amount,
-                    'currency' => 'usd',
+                    'currency' => $currency,
                 ]],
             ],
         ]],
     ], []);
 }
+
+it('refuses to book a refund that names no currency instead of assuming USD', function () {
+    $gatewayId = GatewayId::generate();
+
+    $resolver = Mockery::mock(TransactionIdResolver::class);
+    $resolver->shouldReceive('resolvePaymentIntent')->andReturn('01942f6e-1c3a-7b8d-9e4f-'.uniqid());
+
+    $recorder = Mockery::mock(RefundProcessingRecorder::class);
+    $recorder->shouldNotReceive('onRefundProcessed');
+
+    $handler = new ChargeRefundedHandler($resolver, $recorder);
+
+    expect(fn () => $handler(chargeRefundedEvent(currency: ''), $gatewayId))
+        ->toThrow(RuntimeException::class, 'names no currency');
+});
 
 it('delegates to RefundProcessingRecorder with the resolved PaymentIntent id', function () {
     $gatewayId = GatewayId::generate();

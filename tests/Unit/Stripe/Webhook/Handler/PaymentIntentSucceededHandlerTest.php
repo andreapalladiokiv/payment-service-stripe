@@ -26,6 +26,21 @@ function succeededEvent(string $piReference = 'pi_123', int $amountReceived = 50
     ], []);
 }
 
+it('refuses to book a PaymentIntent that names no currency instead of assuming USD', function () {
+    $gatewayId = GatewayId::generate();
+
+    $resolver = Mockery::mock(TransactionIdResolver::class);
+    $resolver->shouldReceive('resolvePaymentIntent')->andReturn('01942f6e-1c3a-7b8d-9e4f-'.uniqid());
+
+    $recorder = Mockery::mock(GatewaySuccessRecorder::class);
+    $recorder->shouldNotReceive('onGatewaySuccess');
+
+    $handler = new PaymentIntentSucceededHandler($resolver, $recorder);
+
+    expect(fn () => $handler(succeededEvent(currency: ''), $gatewayId))
+        ->toThrow(RuntimeException::class, 'names no currency');
+});
+
 it('delegates to GatewaySuccessRecorder on a known PaymentIntent', function () {
     $gatewayId = GatewayId::generate();
     $piId = '01942f6e-1c3a-7b8d-9e4f-' . uniqid();
