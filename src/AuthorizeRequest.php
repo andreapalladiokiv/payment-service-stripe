@@ -4,8 +4,6 @@ declare(strict_types=1);
 
 namespace Techork\PaymentService\Stripe;
 
-use Omnipay\Common\Http\ClientInterface;
-use Symfony\Component\HttpFoundation\Request as HttpRequest;
 use Techork\PaymentService\Common\ValueObject\Challenge\ThreeDSChallenge;
 use Techork\PaymentService\Gateway\Concern\InstrumentParameters;
 use Techork\PaymentService\Stripe\Concern\ExtractsCardChecks;

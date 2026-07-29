@@ -15,13 +15,18 @@
     ],
     "require": {
         "php": "^8.4",
-        "stripe/stripe-php": "^20.0",
+        "moneyphp/money": "^4.0",
+        "omnipay/common": "^3.5",
+        "psr/http-message": "^1.1 || ^2.0",
+        "stripe/stripe-php": "^21.0",
         "techork/payment-service-common": "@dev",
         "techork/payment-service-gateway": "@dev"
     },
     "require-dev": {
         "mockery/mockery": "^1.6",
-        "pestphp/pest": "^3.0 || ^4.0"
+        "nyholm/psr7": "^1.8",
+        "pestphp/pest": "^3.0 || ^4.0",
+        "symfony/http-foundation": "^7.0 || ^8.0"
     },
     "autoload": {
         "psr-4": {
