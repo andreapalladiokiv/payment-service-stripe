@@ -8,6 +8,7 @@ use Techork\PaymentService\Stripe\Webhook\Handler\ChargeRefundedHandler;
 use Techork\PaymentService\Stripe\Webhook\Handler\ChargeRefundUpdatedHandler;
 use Techork\PaymentService\Stripe\Webhook\Handler\ChargeUpdatedHandler;
 use Techork\PaymentService\Stripe\Webhook\Handler\PaymentIntentCanceledHandler;
+use Techork\PaymentService\Stripe\Webhook\Handler\PaymentIntentCreatedHandler;
 use Techork\PaymentService\Stripe\Webhook\Handler\PaymentIntentFailedHandler;
 use Techork\PaymentService\Stripe\Webhook\Handler\PaymentIntentSucceededHandler;
 use Techork\PaymentService\Stripe\Webhook\Handler\PaymentMethodAttachedHandler;
@@ -23,6 +24,7 @@ final readonly class StripeWebhookSubscriber implements WebhookSubscriber
     public function __construct(
         private SignatureVerifier $verifier,
         private EventParser $parser,
+        private PaymentIntentCreatedHandler $paymentIntentCreated,
         private PaymentIntentSucceededHandler $paymentIntentSucceeded,
         private PaymentIntentCanceledHandler $paymentIntentCanceled,
         private PaymentIntentFailedHandler $paymentIntentFailed,
@@ -37,6 +39,9 @@ final readonly class StripeWebhookSubscriber implements WebhookSubscriber
     {
         $verifiers->register(self::KIND, $this->verifier, $this->parser);
 
+        // First, because it is first in Stripe's own order: everything below
+        // resolves an intent this one is responsible for having created.
+        $handlers->register(self::KIND, 'payment_intent.created', $this->paymentIntentCreated);
         $handlers->register(self::KIND, 'payment_intent.succeeded', $this->paymentIntentSucceeded);
         $handlers->register(self::KIND, 'payment_intent.canceled', $this->paymentIntentCanceled);
         $handlers->register(self::KIND, 'payment_intent.payment_failed', $this->paymentIntentFailed);
