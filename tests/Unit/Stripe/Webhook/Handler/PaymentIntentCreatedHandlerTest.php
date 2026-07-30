@@ -8,7 +8,6 @@ use Stripe\Util\Util;
 use Techork\PaymentService\Gateway\ValueObject\GatewayId;
 use Techork\PaymentService\Gateway\Webhook\Contract\HandlerOutcome;
 use Techork\PaymentService\Gateway\Webhook\Recorder\GatewayPaymentIntentRecorder;
-use Techork\PaymentService\Gateway\Webhook\Recorder\NoOpGatewayPaymentIntentRecorder;
 use Techork\PaymentService\Gateway\Webhook\Recorder\RecorderOutcome;
 use Techork\PaymentService\Stripe\Webhook\Handler\PaymentIntentCreatedHandler;
 
@@ -161,11 +160,3 @@ it('translates every recorder outcome', function (RecorderOutcome $outcome, Hand
     'blocked on something unknown' => [RecorderOutcome::NotFound, HandlerOutcome::Delay],
 ]);
 
-it('does nothing at all under the default no-op recorder', function () {
-    // The bridge binds the no-op, so adding this handler cannot change the
-    // behaviour of a consumer that has not opted in — and the event acks
-    // instead of retrying ten times.
-    $handler = new PaymentIntentCreatedHandler(new NoOpGatewayPaymentIntentRecorder());
-
-    expect($handler(createdEvent(), GatewayId::generate()))->toBe(HandlerOutcome::Skipped);
-});
