@@ -16,6 +16,7 @@ use Techork\PaymentService\Common\ValueObject\CreditCard;
 use Techork\PaymentService\Common\ValueObject\HostedPayment;
 use Techork\PaymentService\Common\ValueObject\PaymentMethod;
 use Techork\PaymentService\Common\ValueObject\Token;
+use Techork\PaymentService\Gateway\Exception\UnsupportedInstrument;
 use Techork\PaymentService\Gateway\Concern\InstrumentParameters;
 use Techork\PaymentService\Gateway\Contract\GatewayCredential;
 use Techork\PaymentService\Stripe\Concern\ExtractsCardChecks;
@@ -158,6 +159,6 @@ final class CreatePaymentMethodRequest extends AbstractRequest implements Paymen
 
     public function visitHostedPayment(HostedPayment $hosted): never
     {
-        throw new \RuntimeException('Gateway does not support hosted-payment instruments.');
+        throw UnsupportedInstrument::forGateway('stripe', 'createPaymentMethod', $hosted);
     }
 }
