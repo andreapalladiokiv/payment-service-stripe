@@ -41,17 +41,30 @@ trait ExtractsConvertedAmount
 {
     private function extractConvertedAmount(?PaymentIntent $paymentIntent): ?Money
     {
-        $charge = $paymentIntent?->latest_charge;
+        // Every read here goes through `??` on purpose. A bare `$obj->missing`
+        // on a Stripe object reaches StripeObject::__get, which logs
+        // "Stripe Notice: Undefined property of …" before returning null
+        // (vendor/stripe/stripe-php/lib/StripeObject.php:191). `??` uses isset
+        // semantics, so __isset answers from the value bag and __get is never
+        // called. Absent is the normal case for this trait — an authorize-only
+        // intent has no charge, an unexpanded charge has no balance transaction
+        // — so reading them bare turns routine null-checks into log noise.
+        $charge = $paymentIntent?->latest_charge ?? null;
         if (! $charge instanceof \Stripe\Charge) {
             return null;
         }
 
-        $balanceTransaction = $charge->balance_transaction;
+        $balanceTransaction = $charge->balance_transaction ?? null;
         if (! $balanceTransaction instanceof \Stripe\BalanceTransaction) {
             return null;
         }
 
-        $settlementCurrency = strtoupper((string) $balanceTransaction->currency);
+        $settlementAmount = $balanceTransaction->amount ?? null;
+        if (! is_int($settlementAmount)) {
+            return null;
+        }
+
+        $settlementCurrency = strtoupper((string) ($balanceTransaction->currency ?? ''));
         $presentmentCurrency = strtoupper((string) ($charge->currency ?? $paymentIntent->currency ?? ''));
 
         // Unknown presentment currency means the comparison cannot be made, and an
@@ -66,7 +79,7 @@ trait ExtractsConvertedAmount
         }
 
         return new Money(
-            $balanceTransaction->amount,
+            $settlementAmount,
             new Currency($settlementCurrency),
         );
     }
