@@ -20,6 +20,7 @@ use Techork\PaymentService\Common\ValueObject\Challenge\ThreeDSChallenge;
 use Techork\PaymentService\Common\ValueObject\Token;
 use Techork\PaymentService\Gateway\Concern\InstrumentParameters;
 use Techork\PaymentService\Gateway\Contract\GatewayCredential;
+use Techork\PaymentService\Gateway\Exception\UnsupportedInstrument;
 use Techork\PaymentService\Stripe\Concern\ExtractsCardChecks;
 use Techork\PaymentService\Stripe\Concern\ExtractsConvertedAmount;
 use Techork\PaymentService\Stripe\Concern\StripeRequestParameters;
@@ -101,7 +102,7 @@ final class PurchaseRequest extends AbstractRequest implements PaymentInstrument
 
     public function visitCash(Cash $cash): never
     {
-        throw new RuntimeException('Stripe does not support cash payments.');
+        throw UnsupportedInstrument::forGateway('stripe', 'purchase', $cash);
     }
 
     public function visitToken(Token $token): array

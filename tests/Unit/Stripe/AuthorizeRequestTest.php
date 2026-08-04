@@ -24,6 +24,7 @@ use Techork\PaymentService\Common\ValueObject\ThreeDS\ThreeDSStatus;
 use Techork\PaymentService\Common\ValueObject\ThreeDS\ThreeDSVersion;
 use Techork\PaymentService\Gateway\Contract\GatewayCredential;
 use Techork\PaymentService\Gateway\Contract\GatewayInstrumentRepository;
+use Techork\PaymentService\Gateway\Exception\UnsupportedInstrument;
 use Techork\PaymentService\Stripe\StripeGateway;
 use Techork\PaymentService\Gateway\ValueObject\GatewayId;
 
@@ -206,7 +207,7 @@ it('throws on cash instrument', function () {
     ]);
 
     $request->getData();
-})->throws(RuntimeException::class, 'Stripe does not support cash');
+})->throws(UnsupportedInstrument::class, 'does not accept a "cash" instrument on the "authorize" operation');
 
 it('stores threeDS parameter when provided', function () {
     $threeDS = new ThreeDSResult(

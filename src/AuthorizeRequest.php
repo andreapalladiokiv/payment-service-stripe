@@ -95,7 +95,7 @@ final class AuthorizeRequest extends AbstractRequest implements PaymentInstrumen
 
     public function visitCash(Cash $cash): never
     {
-        throw new RuntimeException('Stripe does not support cash payments.');
+        throw UnsupportedInstrument::forGateway('stripe', 'authorize', $cash);
     }
 
     public function visitToken(Token $token): array

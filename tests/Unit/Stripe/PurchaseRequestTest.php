@@ -6,6 +6,7 @@ use Money\Currency;
 use Money\Money;
 use Techork\PaymentService\Common\Contract\DecryptInterface;
 use Techork\PaymentService\Common\Contract\EncryptInterface;
+use Techork\PaymentService\Common\ValueObject\Cash;
 use Techork\PaymentService\Common\ValueObject\CardBrand;
 use Techork\PaymentService\Common\ValueObject\CreditCard;
 use Techork\PaymentService\Common\ValueObject\CreditCard\Cvc;
@@ -22,6 +23,7 @@ use Techork\PaymentService\Common\ValueObject\Token;
 use Techork\PaymentService\Common\ValueObject\TokenId;
 use Techork\PaymentService\Gateway\Contract\GatewayCredential;
 use Techork\PaymentService\Gateway\Contract\GatewayInstrumentRepository;
+use Techork\PaymentService\Gateway\Exception\UnsupportedInstrument;
 use Techork\PaymentService\Stripe\StripeGateway;
 use Techork\PaymentService\Gateway\ValueObject\GatewayId;
 
@@ -259,3 +261,14 @@ it('has null threeDS parameter when not provided', function () {
 
     expect($request->getThreeDS())->toBeNull();
 });
+
+it('refuses cash as a wiring error rather than letting it degrade into a decline', function () {
+    $request = purchaseStripeGateway()->purchase([
+        'money' => new Money(1000, new Currency('USD')),
+        'instrument' => new Cash,
+        'gateway' => purchaseCredential(),
+        'decrypter' => Mockery::mock(DecryptInterface::class),
+    ]);
+
+    $request->getData();
+})->throws(UnsupportedInstrument::class, 'does not accept a "cash" instrument on the "purchase" operation');
