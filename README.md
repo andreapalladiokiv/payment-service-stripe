@@ -74,7 +74,7 @@ All responses extend `StripeResponse` (success ⇔ a `reference` is present),
 which implements the Gateway provider contracts:
 
 - `CardChecksProvider` — AVS line / postal-code / CVC results, extracted from the expanded `payment_method.card.checks` and normalized to the `CheckResult` enum (`ExtractsCardChecks`); unknown Stripe values become `null`.
-- `ConvertedAmountProvider` — FX-settled amount from the expanded `latest_charge.balance_transaction`, only when Stripe applied an `exchange_rate` (`ExtractsConvertedAmount`); populated on purchase and capture.
+- `ConvertedAmountProvider` — FX-settled amount from the expanded `latest_charge.balance_transaction`, only when the charge's currency differs from the balance transaction's settlement currency — Stripe's `exchange_rate` is deliberately not consulted (`ExtractsConvertedAmount`); populated on purchase and capture.
 - `ChallengeProvider` — `ThreeDSChallenge` / `RedirectChallenge`, see above.
 
 `ApiErrorException` is never thrown to the caller: requests catch it and

@@ -14,7 +14,9 @@ use Techork\PaymentService\Common\ValueObject\CreditCard\CheckResult;
  *   ['address_line_check' => 'pass', 'postal_code_check' => 'fail', 'cvc_check' => 'pass']
  *
  * Stripe pre-normalizes its response strings to the same vocabulary as our
- * {@see CheckResult} enum, so the mapping is a direct {@see CheckResult::from}.
+ * {@see CheckResult} enum, so the mapping is a direct {@see CheckResult::tryFrom},
+ * which also yields `null` for any value outside the enum's vocabulary rather
+ * than throwing.
  *
  * Each call site must request expansion of `payment_method` from Stripe API
  * (via `'expand' => ['payment_method']`) for these fields to be populated; on
