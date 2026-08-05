@@ -6,6 +6,7 @@ namespace Techork\PaymentService\Stripe;
 
 use Money\Money;
 use Omnipay\Common\Message\AbstractRequest;
+use Override;
 use RuntimeException;
 use Stripe\Exception\ApiErrorException;
 use Stripe\StripeClient;
@@ -22,20 +23,25 @@ use Techork\PaymentService\Gateway\Concern\InstrumentParameters;
 use Techork\PaymentService\Gateway\Contract\GatewayCredential;
 use Techork\PaymentService\Gateway\Exception\UnsupportedInstrument;
 use Techork\PaymentService\Stripe\Concern\ExtractsCardChecks;
+use Techork\PaymentService\Stripe\Concern\FormatsThreeDS;
 use Techork\PaymentService\Stripe\Concern\ExtractsConvertedAmount;
 use Techork\PaymentService\Stripe\Concern\StripeRequestParameters;
 
 /**
  * Charges via Stripe PaymentIntent.
  * Expects: money (Money), instrument (PaymentInstrument), gateway (Gateway).
+ *
+ * @implements PaymentInstrumentVisitor<array>
  */
 final class PurchaseRequest extends AbstractRequest implements PaymentInstrumentVisitor
 {
     use ExtractsCardChecks;
+    use FormatsThreeDS;
     use ExtractsConvertedAmount;
     use InstrumentParameters;
     use StripeRequestParameters;
 
+    #[Override]
     public function getData(): array
     {
         $this->validate('money', 'instrument', 'gateway');
@@ -83,6 +89,7 @@ final class PurchaseRequest extends AbstractRequest implements PaymentInstrument
         return $this->setParameter('customerReference', $value);
     }
 
+    #[Override]
     public function visitCreditCard(CreditCard $card): array
     {
         $decrypter = $this->getDecrypter();
@@ -100,11 +107,13 @@ final class PurchaseRequest extends AbstractRequest implements PaymentInstrument
         ];
     }
 
+    #[Override]
     public function visitCash(Cash $cash): never
     {
         throw UnsupportedInstrument::forGateway('stripe', 'purchase', $cash);
     }
 
+    #[Override]
     public function visitToken(Token $token): array
     {
         /** @var GatewayCredential $gateway */
@@ -117,6 +126,7 @@ final class PurchaseRequest extends AbstractRequest implements PaymentInstrument
         ];
     }
 
+    #[Override]
     public function visitPaymentMethod(PaymentMethod $paymentMethod): array
     {
         /** @var GatewayCredential $gateway */
@@ -129,6 +139,7 @@ final class PurchaseRequest extends AbstractRequest implements PaymentInstrument
         ];
     }
 
+    #[Override]
     public function sendData($data): PurchaseResponse
     {
         if (! empty($data['_hosted'])) {
@@ -165,19 +176,9 @@ final class PurchaseRequest extends AbstractRequest implements PaymentInstrument
                 $params['off_session'] = true;
             }
 
-            $threeDS = $this->getThreeDS();
-            if ($threeDS !== null) {
-                $params['payment_method_options'] = [
-                    'card' => [
-                        'three_d_secure' => [
-                            'cryptogram' => $threeDS->authenticationValue,
-                            'transaction_id' => $threeDS->dsTransactionId,
-                            'version' => $threeDS->version?->value,
-                            'ares_trans_status' => $threeDS->status->value,
-                            'electronic_commerce_indicator' => $threeDS->eci?->value,
-                        ],
-                    ],
-                ];
+            $paymentMethodOptions = $this->formatThreeDS();
+            if ($paymentMethodOptions !== null) {
+                $params['payment_method_options'] = $paymentMethodOptions;
             }
 
             $paymentIntent = $stripe->paymentIntents->create($params, $this->stripeOpts());
@@ -212,6 +213,7 @@ final class PurchaseRequest extends AbstractRequest implements PaymentInstrument
      * page rather than charging a supplied instrument inline. Returns a
      * marker payload that {@see sendData()} dispatches to {@see sendHostedData()}.
      */
+    #[Override]
     public function visitHostedPayment(HostedPayment $hosted): array
     {
         return [

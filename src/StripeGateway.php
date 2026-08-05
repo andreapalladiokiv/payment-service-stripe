@@ -6,6 +6,7 @@ namespace Techork\PaymentService\Stripe;
 
 use Omnipay\Common\AbstractGateway;
 use Omnipay\Common\Message\AbstractRequest;
+use Override;
 use RuntimeException;
 use Stripe\Exception\ApiErrorException;
 use Stripe\StripeClient;
@@ -22,16 +23,19 @@ final class StripeGateway extends AbstractGateway implements Gateway
 {
     private ?CustomerRepository $customerRepository = null;
 
+    #[Override]
     public function getName(): string
     {
         return 'stripe';
     }
 
+    #[Override]
     public function setCustomerRepository(CustomerRepository $repository): void
     {
         $this->customerRepository = $repository;
     }
 
+    #[Override]
     public function getDefaultParameters(): array
     {
         return ['apiKey' => ''];
@@ -57,67 +61,69 @@ final class StripeGateway extends AbstractGateway implements Gateway
         return $this->createRequest(UpdateCustomerRequest::class, $parameters);
     }
 
-    public function createCard(array $parameters = []): AbstractRequest
+    public function createCard(array $options = []): AbstractRequest
     {
-        return $this->createRequest(CreateCardRequest::class, $parameters);
+        return $this->createRequest(CreateCardRequest::class, $options);
     }
 
-    public function createPaymentMethod(array $parameters = []): AbstractRequest
-    {
-        $customerReference = $this->resolveCustomerReference(
-            $parameters['gateway'] ?? null,
-            $parameters['instrument'] ?? null,
-            $parameters['billingAddress'] ?? null,
-            $parameters['referenceResolver'] ?? null,
-        );
-        if ($customerReference !== null) {
-            $parameters['customerReference'] = $customerReference;
-        }
-
-        return $this->createRequest(CreatePaymentMethodRequest::class, $parameters);
-    }
-
-    public function purchase(array $parameters = []): AbstractRequest
+    #[Override]
+    public function createPaymentMethod(array $options = []): AbstractRequest
     {
         $customerReference = $this->resolveCustomerReference(
-            $parameters['gateway'] ?? null,
-            $parameters['instrument'] ?? null,
-            $parameters['billingAddress'] ?? null,
-            $parameters['referenceResolver'] ?? null,
+            $options['gateway'] ?? null,
+            $options['instrument'] ?? null,
+            $options['billingAddress'] ?? null,
+            $options['referenceResolver'] ?? null,
         );
         if ($customerReference !== null) {
-            $parameters['customerReference'] = $customerReference;
+            $options['customerReference'] = $customerReference;
         }
 
-        return $this->createRequest(PurchaseRequest::class, $parameters);
+        return $this->createRequest(CreatePaymentMethodRequest::class, $options);
     }
 
-    public function authorize(array $parameters = []): AbstractRequest
+    public function purchase(array $options = []): AbstractRequest
     {
         $customerReference = $this->resolveCustomerReference(
-            $parameters['gateway'] ?? null,
-            $parameters['instrument'] ?? null,
-            $parameters['billingAddress'] ?? null,
-            $parameters['referenceResolver'] ?? null,
+            $options['gateway'] ?? null,
+            $options['instrument'] ?? null,
+            $options['billingAddress'] ?? null,
+            $options['referenceResolver'] ?? null,
         );
         if ($customerReference !== null) {
-            $parameters['customerReference'] = $customerReference;
+            $options['customerReference'] = $customerReference;
         }
 
-        return $this->createRequest(AuthorizeRequest::class, $parameters);
+        return $this->createRequest(PurchaseRequest::class, $options);
     }
 
-    public function capture(array $parameters = []): AbstractRequest
+    public function authorize(array $options = []): AbstractRequest
     {
-        return $this->createRequest(CaptureRequest::class, $parameters);
+        $customerReference = $this->resolveCustomerReference(
+            $options['gateway'] ?? null,
+            $options['instrument'] ?? null,
+            $options['billingAddress'] ?? null,
+            $options['referenceResolver'] ?? null,
+        );
+        if ($customerReference !== null) {
+            $options['customerReference'] = $customerReference;
+        }
+
+        return $this->createRequest(AuthorizeRequest::class, $options);
     }
 
-    public function refund(array $parameters = []): AbstractRequest
+    public function capture(array $options = []): AbstractRequest
     {
-        return $this->createRequest(RefundRequest::class, $parameters);
+        return $this->createRequest(CaptureRequest::class, $options);
     }
 
-    public function retryRefund(array $parameters = []): AbstractRequest
+    public function refund(array $options = []): AbstractRequest
+    {
+        return $this->createRequest(RefundRequest::class, $options);
+    }
+
+    #[Override]
+    public function retryRefund(array $options = []): AbstractRequest
     {
         // Stripe's Refund API can only return funds along the original
         // PaymentIntent — there is no public primitive to redirect a
@@ -130,22 +136,26 @@ final class StripeGateway extends AbstractGateway implements Gateway
         );
     }
 
-    public function void(array $parameters = []): AbstractRequest
+    #[Override]
+    public function void(array $options = []): AbstractRequest
     {
-        return $this->createRequest(VoidRequest::class, $parameters);
+        return $this->createRequest(VoidRequest::class, $options);
     }
 
-    public function issueVirtualCard(array $parameters = []): AbstractRequest
+    #[Override]
+    public function issueVirtualCard(array $options = []): AbstractRequest
     {
         throw new RuntimeException('Stripe does not support virtual card issuance.');
     }
 
-    public function updateVirtualCard(array $parameters = []): AbstractRequest
+    #[Override]
+    public function updateVirtualCard(array $options = []): AbstractRequest
     {
         throw new RuntimeException('Stripe does not support virtual card update.');
     }
 
-    public function terminateVirtualCard(array $parameters = []): AbstractRequest
+    #[Override]
+    public function terminateVirtualCard(array $options = []): AbstractRequest
     {
         throw new RuntimeException('Stripe does not support virtual card termination.');
     }
@@ -231,7 +241,7 @@ final class StripeGateway extends AbstractGateway implements Gateway
         }
 
         $customerReference = is_object($paymentMethod->customer)
-            ? (string) ($paymentMethod->customer->id ?? '')
+            ? $paymentMethod->customer->id ?? ''
             : (string) ($paymentMethod->customer ?? '');
 
         if ($customerReference === '') {

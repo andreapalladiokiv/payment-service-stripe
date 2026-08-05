@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Techork\PaymentService\Stripe;
 
 use Omnipay\Common\Message\AbstractRequest;
+use Override;
 use RuntimeException;
 use Stripe\Exception\ApiErrorException;
 use Stripe\StripeClient;
@@ -20,14 +21,20 @@ use Techork\PaymentService\Gateway\Exception\UnsupportedInstrument;
 use Techork\PaymentService\Gateway\Concern\InstrumentParameters;
 use Techork\PaymentService\Gateway\Contract\GatewayCredential;
 use Techork\PaymentService\Stripe\Concern\ExtractsCardChecks;
+use Techork\PaymentService\Stripe\Concern\FormatsThreeDS;
 use Techork\PaymentService\Stripe\Concern\StripeRequestParameters;
 
+/**
+ * @implements PaymentInstrumentVisitor<array>
+ */
 final class CreatePaymentMethodRequest extends AbstractRequest implements PaymentInstrumentVisitor
 {
     use ExtractsCardChecks;
+    use FormatsThreeDS;
     use InstrumentParameters;
     use StripeRequestParameters;
 
+    #[Override]
     public function getData(): array
     {
         $this->validate('instrument', 'gateway');
@@ -50,6 +57,7 @@ final class CreatePaymentMethodRequest extends AbstractRequest implements Paymen
         ];
     }
 
+    #[Override]
     public function visitCreditCard(CreditCard $card): array
     {
         $decrypter = $this->getDecrypter();
@@ -65,11 +73,13 @@ final class CreatePaymentMethodRequest extends AbstractRequest implements Paymen
         ];
     }
 
+    #[Override]
     public function visitCash(Cash $cash): never
     {
         throw new RuntimeException('Stripe does not support cash payments.');
     }
 
+    #[Override]
     public function visitToken(Token $token): array
     {
         /** @var GatewayCredential $gateway */
@@ -83,11 +93,13 @@ final class CreatePaymentMethodRequest extends AbstractRequest implements Paymen
         ];
     }
 
+    #[Override]
     public function visitPaymentMethod(PaymentMethod $paymentMethod): never
     {
         throw new RuntimeException('Cannot create a Stripe PaymentMethod from an existing PaymentMethod.');
     }
 
+    #[Override]
     public function sendData($data): CreatePaymentMethodResponse
     {
         try {
@@ -96,7 +108,7 @@ final class CreatePaymentMethodRequest extends AbstractRequest implements Paymen
             $paymentMethod = $stripe->paymentMethods->create($data['payment_method_data'], $this->stripeOpts());
 
             if ($data['customerReference'] !== '') {
-                $stripe->paymentMethods->attach($paymentMethod->id, ['customer' => $data['customerReference']]);
+                $stripe->paymentMethods->attach($paymentMethod->id, ['customer' => (string) $data['customerReference']]);
             }
 
             // Confirm via SetupIntent so Stripe runs AVS/CVC checks against the
@@ -115,19 +127,9 @@ final class CreatePaymentMethodRequest extends AbstractRequest implements Paymen
                 $setupParams['customer'] = $data['customerReference'];
             }
 
-            $threeDS = $this->getThreeDS();
-            if ($threeDS !== null) {
-                $setupParams['payment_method_options'] = [
-                    'card' => [
-                        'three_d_secure' => [
-                            'cryptogram' => $threeDS->authenticationValue,
-                            'transaction_id' => (string) $threeDS->dsTransactionId,
-                            'version' => $threeDS->version?->value,
-                            'ares_trans_status' => $threeDS->status->value,
-                            'electronic_commerce_indicator' => $threeDS->eci?->value,
-                        ],
-                    ],
-                ];
+            $paymentMethodOptions = $this->formatThreeDS();
+            if ($paymentMethodOptions !== null) {
+                $setupParams['payment_method_options'] = $paymentMethodOptions;
             }
 
             $stripe->setupIntents->create($setupParams, $this->stripeOpts());
@@ -157,6 +159,7 @@ final class CreatePaymentMethodRequest extends AbstractRequest implements Paymen
         return $this->setParameter('customerReference', $value);
     }
 
+    #[Override]
     public function visitHostedPayment(HostedPayment $hosted): never
     {
         throw UnsupportedInstrument::forGateway('stripe', 'createPaymentMethod', $hosted);

@@ -4,9 +4,11 @@ declare(strict_types=1);
 
 namespace Techork\PaymentService\Stripe;
 
+use Override;
 use Techork\PaymentService\Common\ValueObject\Challenge\ThreeDSChallenge;
 use Techork\PaymentService\Gateway\Concern\InstrumentParameters;
 use Techork\PaymentService\Stripe\Concern\ExtractsCardChecks;
+use Techork\PaymentService\Stripe\Concern\FormatsThreeDS;
 use Techork\PaymentService\Stripe\Concern\StripeRequestParameters;
 use Techork\PaymentService\Gateway\Contract\GatewayCredential;
 use Money\Money;
@@ -23,12 +25,17 @@ use Techork\PaymentService\Gateway\Exception\UnsupportedInstrument;
 use Stripe\Exception\ApiErrorException;
 use Stripe\StripeClient;
 
+/**
+ * @implements PaymentInstrumentVisitor<array>
+ */
 final class AuthorizeRequest extends AbstractRequest implements PaymentInstrumentVisitor
 {
     use ExtractsCardChecks;
+    use FormatsThreeDS;
     use InstrumentParameters;
     use StripeRequestParameters;
 
+    #[Override]
     public function getData(): array
     {
         $this->validate('money', 'instrument', 'gateway');
@@ -76,6 +83,7 @@ final class AuthorizeRequest extends AbstractRequest implements PaymentInstrumen
         return $this->setParameter('customerReference', $value);
     }
 
+    #[Override]
     public function visitCreditCard(CreditCard $card): array
     {
         $decrypter = $this->getDecrypter();
@@ -93,11 +101,13 @@ final class AuthorizeRequest extends AbstractRequest implements PaymentInstrumen
         ];
     }
 
+    #[Override]
     public function visitCash(Cash $cash): never
     {
         throw UnsupportedInstrument::forGateway('stripe', 'authorize', $cash);
     }
 
+    #[Override]
     public function visitToken(Token $token): array
     {
         /** @var GatewayCredential $gateway */
@@ -110,6 +120,7 @@ final class AuthorizeRequest extends AbstractRequest implements PaymentInstrumen
         ];
     }
 
+    #[Override]
     public function visitPaymentMethod(PaymentMethod $paymentMethod): array
     {
         /** @var GatewayCredential $gateway */
@@ -122,6 +133,7 @@ final class AuthorizeRequest extends AbstractRequest implements PaymentInstrumen
         ];
     }
 
+    #[Override]
     public function sendData($data): AuthorizeResponse
     {
         try {
@@ -154,19 +166,9 @@ final class AuthorizeRequest extends AbstractRequest implements PaymentInstrumen
                 $params['off_session'] = true;
             }
 
-            $threeDS = $this->getThreeDS();
-            if ($threeDS !== null) {
-                $params['payment_method_options'] = [
-                    'card' => [
-                        'three_d_secure' => [
-                            'cryptogram' => $threeDS->authenticationValue,
-                            'transaction_id' => $threeDS->dsTransactionId,
-                            'version' => $threeDS->version?->value,
-                            'ares_trans_status' => $threeDS->status->value,
-                            'electronic_commerce_indicator' => $threeDS->eci?->value,
-                        ],
-                    ],
-                ];
+            $paymentMethodOptions = $this->formatThreeDS();
+            if ($paymentMethodOptions !== null) {
+                $params['payment_method_options'] = $paymentMethodOptions;
             }
 
             $paymentIntent = $stripe->paymentIntents->create($params, $this->stripeOpts());
@@ -195,6 +197,7 @@ final class AuthorizeRequest extends AbstractRequest implements PaymentInstrumen
         }
     }
 
+    #[Override]
     public function visitHostedPayment(HostedPayment $hosted): never
     {
         throw UnsupportedInstrument::forGateway('stripe', 'authorize', $hosted);
