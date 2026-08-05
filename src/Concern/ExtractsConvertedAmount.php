@@ -6,6 +6,8 @@ namespace Techork\PaymentService\Stripe\Concern;
 
 use Money\Currency;
 use Money\Money;
+use Stripe\BalanceTransaction;
+use Stripe\Charge;
 use Stripe\PaymentIntent;
 
 /**
@@ -50,12 +52,12 @@ trait ExtractsConvertedAmount
         // intent has no charge, an unexpanded charge has no balance transaction
         // — so reading them bare turns routine null-checks into log noise.
         $charge = $paymentIntent?->latest_charge ?? null;
-        if (! $charge instanceof \Stripe\Charge) {
+        if (! $charge instanceof Charge) {
             return null;
         }
 
         $balanceTransaction = $charge->balance_transaction ?? null;
-        if (! $balanceTransaction instanceof \Stripe\BalanceTransaction) {
+        if (! $balanceTransaction instanceof BalanceTransaction) {
             return null;
         }
 
@@ -64,8 +66,8 @@ trait ExtractsConvertedAmount
             return null;
         }
 
-        $settlementCurrency = strtoupper((string) ($balanceTransaction->currency ?? ''));
-        $presentmentCurrency = strtoupper((string) ($charge->currency ?? $paymentIntent->currency ?? ''));
+        $settlementCurrency = strtoupper($balanceTransaction->currency ?? '');
+        $presentmentCurrency = strtoupper($charge->currency ?? $paymentIntent->currency ?? '');
 
         // Unknown presentment currency means the comparison cannot be made, and an
         // unknown must not read as a difference — that would report a conversion on

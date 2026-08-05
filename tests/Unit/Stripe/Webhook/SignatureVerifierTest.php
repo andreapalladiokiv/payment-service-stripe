@@ -3,16 +3,15 @@
 declare(strict_types=1);
 
 use Nyholm\Psr7\Factory\Psr17Factory;
-use Stripe\WebhookSignature;
 use Techork\PaymentService\Gateway\Contract\GatewayCredential;
 use Techork\PaymentService\Stripe\Webhook\SignatureVerifier;
 use Techork\PaymentService\Gateway\ValueObject\GatewayId;
 
 function stripeCredential(string $secret): GatewayCredential
 {
-    return new class($secret) implements GatewayCredential
+    return new readonly class($secret) implements GatewayCredential
     {
-        public function __construct(private readonly string $secret) {}
+        public function __construct(private string $secret) {}
 
         public function getId(): GatewayId
         {

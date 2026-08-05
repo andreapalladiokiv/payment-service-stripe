@@ -7,8 +7,10 @@ namespace Techork\PaymentService\Stripe\Webhook\Handler;
 use DateTimeImmutable;
 use Money\Currency;
 use Money\Money;
+use Override;
 use Stripe\Event;
 use Stripe\Exception\ApiErrorException;
+use Stripe\StripeClient;
 use Techork\PaymentService\Gateway\Contract\GatewayCredentialRepository;
 use Techork\PaymentService\Gateway\ValueObject\GatewayId;
 use Techork\PaymentService\Gateway\Webhook\Contract\HandlerOutcome;
@@ -36,6 +38,7 @@ final readonly class ChargeRefundUpdatedHandler implements WebhookEventHandler
         private GatewayCredentialRepository $credentialRepository,
     ) {}
 
+    #[Override]
     public function __invoke(object $event, GatewayId $gatewayId): HandlerOutcome
     {
         /** @var Event $event */
@@ -77,7 +80,7 @@ final readonly class ChargeRefundUpdatedHandler implements WebhookEventHandler
         }
 
         try {
-            $bt = (new \Stripe\StripeClient($apiKey))->balanceTransactions->retrieve($balanceTransactionId);
+            $bt = new StripeClient($apiKey)->balanceTransactions->retrieve($balanceTransactionId);
         } catch (ApiErrorException) {
             return null;
         }

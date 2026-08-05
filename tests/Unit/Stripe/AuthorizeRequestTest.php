@@ -7,6 +7,7 @@ use Money\Money;
 use Techork\PaymentService\Common\Contract\DecryptInterface;
 use Techork\PaymentService\Common\Contract\EncryptInterface;
 use Techork\PaymentService\Common\ValueObject\BillingAddress;
+use Techork\PaymentService\Common\ValueObject\Cash;
 use Techork\PaymentService\Common\ValueObject\Country;
 use Techork\PaymentService\Common\ValueObject\CreditCard;
 use Techork\PaymentService\Common\ValueObject\CreditCard\Cvc;
@@ -201,7 +202,7 @@ it('omits statement_descriptor when statementDescription is null or empty', func
 it('throws on cash instrument', function () {
     $request = stripeGateway()->authorize([
         'money' => new Money(5000, new Currency('USD')),
-        'instrument' => new \Techork\PaymentService\Common\ValueObject\Cash,
+        'instrument' => new Cash,
         'gateway' => fakeCredential(),
         'decrypter' => fakeDecrypter(),
     ]);

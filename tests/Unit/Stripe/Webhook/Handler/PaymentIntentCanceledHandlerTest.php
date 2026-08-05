@@ -30,7 +30,7 @@ it('delegates to GatewayCancellationRecorder on a known PaymentIntent', function
     $recorder = Mockery::mock(GatewayCancellationRecorder::class);
     $recorder->shouldReceive('onGatewayCancellation')->once()->with($piId)->andReturn(RecorderOutcome::Applied);
 
-    expect((new PaymentIntentCanceledHandler($resolver, $recorder))(canceledEvent(), $gatewayId))
+    expect(new PaymentIntentCanceledHandler($resolver, $recorder)(canceledEvent(), $gatewayId))
         ->toBe(HandlerOutcome::Processed);
 });
 
@@ -41,6 +41,6 @@ it('returns Delay when the PI is unknown', function () {
     $recorder = Mockery::mock(GatewayCancellationRecorder::class);
     $recorder->shouldNotReceive('onGatewayCancellation');
 
-    expect((new PaymentIntentCanceledHandler($resolver, $recorder))(canceledEvent(), GatewayId::generate()))
+    expect(new PaymentIntentCanceledHandler($resolver, $recorder)(canceledEvent(), GatewayId::generate()))
         ->toBe(HandlerOutcome::Delay);
 });

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Techork\PaymentService\Stripe\Webhook;
 
+use Override;
 use Techork\PaymentService\Gateway\Webhook\Contract\EventParser as EventParserContract;
 use Techork\PaymentService\Gateway\Webhook\Contract\ParsedEvent;
 use Stripe\Event;
@@ -17,6 +18,7 @@ final readonly class EventParser implements EventParserContract
     /**
      * @return ParsedEvent<Event>
      */
+    #[Override]
     public function parse(array $payload): ParsedEvent
     {
         $event = Event::constructFrom($payload);

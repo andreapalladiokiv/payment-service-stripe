@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Techork\PaymentService\Stripe;
 
+use Override;
 use Techork\PaymentService\Stripe\Concern\StripeRequestParameters;
 use Omnipay\Common\Message\AbstractRequest;
 use Stripe\Exception\ApiErrorException;
@@ -13,6 +14,7 @@ final class UpdateCustomerRequest extends AbstractRequest
 {
     use StripeRequestParameters;
 
+    #[Override]
     public function getData(): array
     {
         return array_filter([
@@ -27,6 +29,7 @@ final class UpdateCustomerRequest extends AbstractRequest
         ]);
     }
 
+    #[Override]
     public function sendData($data): CreateCustomerResponse
     {
         try {

@@ -2,6 +2,8 @@
 
 declare(strict_types=1);
 
+use Techork\PaymentService\Common\Contract\DecryptInterface;
+use Techork\PaymentService\Common\Contract\EncryptInterface;
 use Techork\PaymentService\Common\ValueObject\CardBrand;
 use Techork\PaymentService\Common\ValueObject\Cash;
 use Techork\PaymentService\Common\ValueObject\CreditCard;
@@ -18,7 +20,7 @@ it('builds tokenize data for credit card', function () {
     $gw = new StripeGateway;
     $gw->initialize(['apiKey' => 'sk_test']);
 
-    $encrypter = new class implements \Techork\PaymentService\Common\Contract\EncryptInterface {
+    $encrypter = new class implements EncryptInterface {
         public function encrypt(string $data): string { return $data; }
     };
 
@@ -29,7 +31,7 @@ it('builds tokenize data for credit card', function () {
         Cvc::fromCvc('456', $encrypter),
     );
 
-    $decrypter = new class implements \Techork\PaymentService\Common\Contract\DecryptInterface {
+    $decrypter = new class implements DecryptInterface {
         public function decrypt(string $data): string { return $data; }
     };
 
@@ -64,7 +66,7 @@ it('throws on token instrument', function () {
         ExpiresAt::fromDateTime(new DateTimeImmutable('+1 hour')),
     );
 
-    $decrypter = new class implements \Techork\PaymentService\Common\Contract\DecryptInterface {
+    $decrypter = new class implements DecryptInterface {
         public function decrypt(string $data): string { return $data; }
     };
 
@@ -80,7 +82,7 @@ it('throws on cash instrument', function () {
     $gw = new StripeGateway;
     $gw->initialize(['apiKey' => 'sk_test']);
 
-    $decrypter = new class implements \Techork\PaymentService\Common\Contract\DecryptInterface {
+    $decrypter = new class implements DecryptInterface {
         public function decrypt(string $data): string { return $data; }
     };
 

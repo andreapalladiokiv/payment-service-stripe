@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Techork\PaymentService\Stripe;
 
+use Override;
 use Techork\PaymentService\Stripe\Concern\StripeRequestParameters;
 use Money\Money;
 use Omnipay\Common\Message\AbstractRequest;
@@ -18,6 +19,7 @@ final class RefundRequest extends AbstractRequest
 {
     use StripeRequestParameters;
 
+    #[Override]
     public function getData(): array
     {
         $this->validate('money', 'transactionReference');
@@ -31,14 +33,15 @@ final class RefundRequest extends AbstractRequest
         ];
     }
 
+    #[Override]
     public function sendData($data): RefundResponse
     {
         try {
             $stripe = new StripeClient($this->getApiKey());
 
             $refund = $stripe->refunds->create([
-                'payment_intent' => $data['payment_intent'],
-                'amount' => $data['amount'],
+                'payment_intent' => (string) $data['payment_intent'],
+                'amount' => (int) $data['amount'],
             ], $this->stripeOpts());
 
             return new RefundResponse($this, [

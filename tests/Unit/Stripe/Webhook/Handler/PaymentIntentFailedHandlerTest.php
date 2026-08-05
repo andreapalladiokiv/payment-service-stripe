@@ -31,7 +31,7 @@ it('extracts reason from last_payment_error.message and delegates to the recorde
     $recorder = Mockery::mock(GatewayFailureRecorder::class);
     $recorder->shouldReceive('onGatewayFailure')->once()->with($piId, 'Card declined')->andReturn(RecorderOutcome::Applied);
 
-    expect((new PaymentIntentFailedHandler($resolver, $recorder))($event, $gatewayId))->toBe(HandlerOutcome::Processed);
+    expect(new PaymentIntentFailedHandler($resolver, $recorder)($event, $gatewayId))->toBe(HandlerOutcome::Processed);
 });
 
 it('falls back to a generic reason when last_payment_error is absent', function () {
@@ -53,5 +53,5 @@ it('falls back to a generic reason when last_payment_error is absent', function 
         ->with($piId, 'Payment failed at gateway')
         ->andReturn(RecorderOutcome::Applied);
 
-    expect((new PaymentIntentFailedHandler($resolver, $recorder))($event, $gatewayId))->toBe(HandlerOutcome::Processed);
+    expect(new PaymentIntentFailedHandler($resolver, $recorder)($event, $gatewayId))->toBe(HandlerOutcome::Processed);
 });

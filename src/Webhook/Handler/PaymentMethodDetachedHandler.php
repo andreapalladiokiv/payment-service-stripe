@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Techork\PaymentService\Stripe\Webhook\Handler;
 
+use Override;
 use Techork\PaymentService\Gateway\Webhook\Contract\HandlerOutcome;
 use Techork\PaymentService\Gateway\Webhook\Contract\InstrumentReferenceEraser;
 use Techork\PaymentService\Gateway\Webhook\Contract\WebhookEventHandler;
@@ -23,6 +24,7 @@ final readonly class PaymentMethodDetachedHandler implements WebhookEventHandler
         private InstrumentReferenceEraser $eraser,
     ) {}
 
+    #[Override]
     public function __invoke(object $event, GatewayId $gatewayId): HandlerOutcome
     {
         /** @var Event $event */

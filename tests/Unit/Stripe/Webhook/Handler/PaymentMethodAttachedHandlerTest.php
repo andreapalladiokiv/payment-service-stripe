@@ -58,7 +58,7 @@ it('delegates to GatewayPaymentMethodRecorder with parsed card and billing addre
         })
         ->andReturn(RecorderOutcome::Applied);
 
-    expect((new PaymentMethodAttachedHandler($recorder))(pmAttachedEvent(), $gatewayId))
+    expect(new PaymentMethodAttachedHandler($recorder)(pmAttachedEvent(), $gatewayId))
         ->toBe(HandlerOutcome::Processed);
 });
 
@@ -66,7 +66,7 @@ it('returns Skipped when the payment method is not a card', function () {
     $recorder = Mockery::mock(GatewayPaymentMethodRecorder::class);
     $recorder->shouldNotReceive('onPaymentMethodRecord');
 
-    expect((new PaymentMethodAttachedHandler($recorder))(pmAttachedEvent(['type' => 'us_bank_account']), GatewayId::generate()))
+    expect(new PaymentMethodAttachedHandler($recorder)(pmAttachedEvent(['type' => 'us_bank_account']), GatewayId::generate()))
         ->toBe(HandlerOutcome::Skipped);
 });
 
@@ -84,7 +84,7 @@ it('fills shredding stubs and records when billing address is incomplete', funct
         })
         ->andReturn(RecorderOutcome::Applied);
 
-    expect((new PaymentMethodAttachedHandler($recorder))(pmAttachedEvent(['billing_details' => ['name' => '', 'address' => ['line1' => '', 'city' => '', 'country' => '', 'postal_code' => '']]]), $gatewayId))
+    expect(new PaymentMethodAttachedHandler($recorder)(pmAttachedEvent(['billing_details' => ['name' => '', 'address' => ['line1' => '', 'city' => '', 'country' => '', 'postal_code' => '']]]), $gatewayId))
         ->toBe(HandlerOutcome::Processed);
 });
 
@@ -92,6 +92,6 @@ it('maps Skipped from the recorder straight through', function () {
     $recorder = Mockery::mock(GatewayPaymentMethodRecorder::class);
     $recorder->shouldReceive('onPaymentMethodRecord')->andReturn(RecorderOutcome::Skipped);
 
-    expect((new PaymentMethodAttachedHandler($recorder))(pmAttachedEvent(), GatewayId::generate()))
+    expect(new PaymentMethodAttachedHandler($recorder)(pmAttachedEvent(), GatewayId::generate()))
         ->toBe(HandlerOutcome::Skipped);
 });

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Techork\PaymentService\Stripe;
 
+use Override;
 use Techork\PaymentService\Gateway\Concern\InstrumentParameters;
 use Techork\PaymentService\Stripe\Concern\StripeRequestParameters;
 use Omnipay\Common\Message\AbstractRequest;
@@ -19,11 +20,15 @@ use Techork\PaymentService\Gateway\Exception\UnsupportedInstrument;
 use Stripe\Exception\ApiErrorException;
 use Stripe\StripeClient;
 
+/**
+ * @implements PaymentInstrumentVisitor<array>
+ */
 final class CreateCardRequest extends AbstractRequest implements PaymentInstrumentVisitor
 {
     use InstrumentParameters;
     use StripeRequestParameters;
 
+    #[Override]
     public function getData(): array
     {
         /** @var PaymentInstrument $instrument */
@@ -32,6 +37,7 @@ final class CreateCardRequest extends AbstractRequest implements PaymentInstrume
         return $instrument->accept($this);
     }
 
+    #[Override]
     public function visitCreditCard(CreditCard $card): array
     {
         $decrypter = $this->getDecrypter();
@@ -57,21 +63,25 @@ final class CreateCardRequest extends AbstractRequest implements PaymentInstrume
         return $data;
     }
 
+    #[Override]
     public function visitCash(Cash $cash): mixed
     {
         throw new RuntimeException('Stripe does not support cash payments.');
     }
 
+    #[Override]
     public function visitToken(Token $token): never
     {
         throw new RuntimeException('Token does not support tokenization.');
     }
 
+    #[Override]
     public function visitPaymentMethod(PaymentMethod $paymentMethod): never
     {
         throw new RuntimeException('PaymentMethod does not support tokenization.');
     }
 
+    #[Override]
     public function sendData($data): CreateCardResponse
     {
         try {
@@ -91,6 +101,7 @@ final class CreateCardRequest extends AbstractRequest implements PaymentInstrume
         }
     }
 
+    #[Override]
     public function visitHostedPayment(HostedPayment $hosted): never
     {
         throw UnsupportedInstrument::forGateway('stripe', 'createCard', $hosted);

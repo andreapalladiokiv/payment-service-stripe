@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use Omnipay\Common\Exception\InvalidRequestException;
 use Techork\PaymentService\Stripe\StripeGateway;
 use Techork\PaymentService\Stripe\VoidResponse;
 
@@ -27,7 +28,7 @@ it('throws when transactionReference is missing', function () {
     $request = voidGateway()->void();
 
     $request->getData();
-})->throws(\Omnipay\Common\Exception\InvalidRequestException::class);
+})->throws(InvalidRequestException::class);
 
 it('returns VoidResponse that is successful when status is canceled', function () {
     $request = voidGateway()->void([

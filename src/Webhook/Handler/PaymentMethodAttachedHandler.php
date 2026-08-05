@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Techork\PaymentService\Stripe\Webhook\Handler;
 
+use Override;
 use Techork\PaymentService\Gateway\Webhook\Contract\HandlerOutcome;
 use Techork\PaymentService\Gateway\Webhook\Contract\WebhookEventHandler;
 use Techork\PaymentService\Gateway\Webhook\Recorder\GatewayPaymentMethodRecorder;
@@ -35,6 +36,7 @@ final readonly class PaymentMethodAttachedHandler implements WebhookEventHandler
         private GatewayPaymentMethodRecorder $recorder,
     ) {}
 
+    #[Override]
     public function __invoke(object $event, GatewayId $gatewayId): HandlerOutcome
     {
         /** @var Event $event */

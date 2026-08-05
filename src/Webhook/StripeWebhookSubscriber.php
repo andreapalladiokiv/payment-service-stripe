@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Techork\PaymentService\Stripe\Webhook;
 
+use Override;
 use Techork\PaymentService\Stripe\Webhook\Handler\ChargeRefundedHandler;
 use Techork\PaymentService\Stripe\Webhook\Handler\ChargeRefundUpdatedHandler;
 use Techork\PaymentService\Stripe\Webhook\Handler\ChargeUpdatedHandler;
@@ -33,6 +34,7 @@ final readonly class StripeWebhookSubscriber implements WebhookSubscriber
         private PaymentMethodDetachedHandler $paymentMethodDetached,
     ) {}
 
+    #[Override]
     public function subscribe(VerifierRegistry $verifiers, HandlerRegistry $handlers): void
     {
         $verifiers->register(self::KIND, $this->verifier, $this->parser);

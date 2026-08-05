@@ -19,7 +19,12 @@ trait StripeRequestParameters
         return $this->setParameter('apiKey', $value);
     }
 
-    public function setMoney(Money $value): self
+    /**
+     * `static`, not `self`: this overrides {@see \Omnipay\Common\Message\AbstractRequest::setMoney},
+     * which is annotated `@return $this`. Naming the using class instead would promise a
+     * fixed type where the parent promises the called one.
+     */
+    public function setMoney(Money $value): static
     {
         return $this->setParameter('money', $value);
     }
@@ -77,6 +82,11 @@ trait StripeRequestParameters
      * SDK's default behavior.
      *
      * @return array<string, mixed>
+     */
+    /**
+     * @return array{idempotency_key?: non-empty-string} the shape Stripe's services declare
+     *   for their per-request options argument; a bare `array` made every call site an
+     *   unverifiable coercion
      */
     protected function stripeOpts(): array
     {

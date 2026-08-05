@@ -26,7 +26,7 @@ it('forgets the reference and reports Processed', function () {
         ->with(Mockery::on(fn (GatewayId $g) => $g->toString() === $gatewayId->toString()), 'pm_abc')
         ->andReturnTrue();
 
-    expect((new PaymentMethodDetachedHandler($eraser))(pmDetachedEvent(), $gatewayId))
+    expect(new PaymentMethodDetachedHandler($eraser)(pmDetachedEvent(), $gatewayId))
         ->toBe(HandlerOutcome::Processed);
 });
 
@@ -34,7 +34,7 @@ it('returns Skipped when nothing was erased', function () {
     $eraser = Mockery::mock(InstrumentReferenceEraser::class);
     $eraser->shouldReceive('forgetPaymentMethodReference')->andReturnFalse();
 
-    expect((new PaymentMethodDetachedHandler($eraser))(pmDetachedEvent(), GatewayId::generate()))
+    expect(new PaymentMethodDetachedHandler($eraser)(pmDetachedEvent(), GatewayId::generate()))
         ->toBe(HandlerOutcome::Skipped);
 });
 
@@ -48,6 +48,6 @@ it('returns Skipped when the payload lacks an id', function () {
     $eraser = Mockery::mock(InstrumentReferenceEraser::class);
     $eraser->shouldNotReceive('forgetPaymentMethodReference');
 
-    expect((new PaymentMethodDetachedHandler($eraser))($event, GatewayId::generate()))
+    expect(new PaymentMethodDetachedHandler($eraser)($event, GatewayId::generate()))
         ->toBe(HandlerOutcome::Skipped);
 });

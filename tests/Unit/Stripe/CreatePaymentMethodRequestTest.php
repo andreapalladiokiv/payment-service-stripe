@@ -2,8 +2,6 @@
 
 declare(strict_types=1);
 
-use Omnipay\Common\Http\PsrClient as OmnipayClient;
-use Symfony\Component\HttpFoundation\Request as HttpRequest;
 use Techork\PaymentService\Common\Contract\DecryptInterface;
 use Techork\PaymentService\Common\Contract\EncryptInterface;
 use Techork\PaymentService\Common\ValueObject\BillingAddress;

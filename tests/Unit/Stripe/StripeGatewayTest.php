@@ -2,6 +2,9 @@
 
 declare(strict_types=1);
 
+use Stripe\ApiRequestor;
+use Stripe\HttpClient\ClientInterface;
+use Stripe\HttpClient\CurlClient;
 use Techork\PaymentService\Common\ValueObject\BillingAddress;
 use Techork\PaymentService\Common\ValueObject\CardBrand;
 use Techork\PaymentService\Common\ValueObject\Country;
@@ -124,7 +127,7 @@ function stripeSavedPaymentMethod(): PaymentMethod
  */
 function fakeStripeHttp(array $body, int $status = 200): void
 {
-    $client = new readonly class($body, $status) implements \Stripe\HttpClient\ClientInterface
+    $client = new readonly class($body, $status) implements ClientInterface
     {
         public function __construct(private array $body, private int $status) {}
 
@@ -134,11 +137,11 @@ function fakeStripeHttp(array $body, int $status = 200): void
         }
     };
 
-    \Stripe\ApiRequestor::setHttpClient($client);
+    ApiRequestor::setHttpClient($client);
 }
 
 afterEach(function () {
-    \Stripe\ApiRequestor::setHttpClient(\Stripe\HttpClient\CurlClient::instance());
+    ApiRequestor::setHttpClient(CurlClient::instance());
 });
 
 it('keeps an existing non-empty customer link on purchase', function () {

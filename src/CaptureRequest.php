@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Techork\PaymentService\Stripe;
 
+use Override;
 use Techork\PaymentService\Stripe\Concern\ExtractsConvertedAmount;
 use Techork\PaymentService\Stripe\Concern\StripeRequestParameters;
 use Money\Money;
@@ -20,6 +21,7 @@ final class CaptureRequest extends AbstractRequest
     use ExtractsConvertedAmount;
     use StripeRequestParameters;
 
+    #[Override]
     public function getData(): array
     {
         $this->validate('transactionReference');
@@ -37,6 +39,7 @@ final class CaptureRequest extends AbstractRequest
         return $data;
     }
 
+    #[Override]
     public function sendData($data): CaptureResponse
     {
         try {

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Techork\PaymentService\Stripe\Webhook;
 
+use Override;
 use Psr\Http\Message\ServerRequestInterface;
 use Stripe\Exception\SignatureVerificationException;
 use Stripe\Webhook;
@@ -18,6 +19,7 @@ use Techork\PaymentService\Gateway\Webhook\Contract\SignatureVerifier as Signatu
  */
 final readonly class SignatureVerifier implements SignatureVerifierContract
 {
+    #[Override]
     public function verify(ServerRequestInterface $request, GatewayCredential $gateway): bool
     {
         $signature = $request->getHeaderLine('Stripe-Signature');

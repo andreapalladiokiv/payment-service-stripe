@@ -57,7 +57,6 @@ it('reads the settlement amount when presentment and settlement currency differ'
         presentmentCurrency: 'eur',
         settledAmount: 5712,
         settlementCurrency: 'usd',
-        exchangeRate: null,
     );
 
     expect(convertedAmountExtractor()->extract($paymentIntent))

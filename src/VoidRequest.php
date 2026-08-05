@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Techork\PaymentService\Stripe;
 
 use Omnipay\Common\Message\AbstractRequest;
+use Override;
 use Stripe\Exception\ApiErrorException;
 use Stripe\StripeClient;
 use Techork\PaymentService\Stripe\Concern\StripeRequestParameters;
@@ -17,6 +18,7 @@ final class VoidRequest extends AbstractRequest
 {
     use StripeRequestParameters;
 
+    #[Override]
     public function getData(): array
     {
         $this->validate('transactionReference');
@@ -26,6 +28,7 @@ final class VoidRequest extends AbstractRequest
         ];
     }
 
+    #[Override]
     public function sendData($data): VoidResponse
     {
         try {

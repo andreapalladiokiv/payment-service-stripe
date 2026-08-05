@@ -62,7 +62,7 @@ it('delegates to RefundProcessingRecorder with the resolved PaymentIntent id', f
         ->with($gatewayId, $piId, 're_abc', Mockery::on(fn (Money $m) => $m->getAmount() === '1000' && $m->getCurrency()->getCode() === 'USD'))
         ->andReturn(RecorderOutcome::Applied);
 
-    expect((new ChargeRefundedHandler($resolver, $recorder))(chargeRefundedEvent(), $gatewayId))
+    expect(new ChargeRefundedHandler($resolver, $recorder)(chargeRefundedEvent(), $gatewayId))
         ->toBe(HandlerOutcome::Processed);
 });
 
@@ -93,6 +93,6 @@ it('returns Delay when the PaymentIntent reference is unknown', function () {
     $recorder = Mockery::mock(RefundProcessingRecorder::class);
     $recorder->shouldNotReceive('onRefundProcessed');
 
-    expect((new ChargeRefundedHandler($resolver, $recorder))(chargeRefundedEvent(), GatewayId::generate()))
+    expect(new ChargeRefundedHandler($resolver, $recorder)(chargeRefundedEvent(), GatewayId::generate()))
         ->toBe(HandlerOutcome::Delay);
 });
