@@ -27,7 +27,7 @@ final readonly class SignatureVerifier implements SignatureVerifierContract
             return false;
         }
 
-        $payload = $request->getBody()->getContents();
+        $payload = (string) $request->getBody();
         $secret = $gateway->getCredentials()['webhook_signing_key'] ?? null;
         if (! is_string($secret) || $secret === '') {
             return false;

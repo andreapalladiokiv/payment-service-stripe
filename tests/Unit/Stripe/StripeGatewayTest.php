@@ -18,6 +18,8 @@ use Techork\PaymentService\Common\ValueObject\PaymentMethodId;
 use Techork\PaymentService\Gateway\Contract\CustomerRepository;
 use Techork\PaymentService\Gateway\Contract\GatewayCredential;
 use Techork\PaymentService\Gateway\Contract\GatewayInstrumentRepository;
+use Techork\PaymentService\Gateway\Exception\UnsupportedByGateway;
+use Techork\PaymentService\Gateway\Exception\UnsupportedOperation;
 use Techork\PaymentService\Gateway\ValueObject\GatewayId;
 use Techork\PaymentService\Stripe\AuthorizeRequest;
 use Techork\PaymentService\Stripe\CaptureRequest;
@@ -259,4 +261,43 @@ it('falls through gracefully when the Stripe lookup fails', function () {
     ]);
 
     expect($request->getCustomerReference())->toBe('');
+});
+
+// ──────────────────────────────────────────────
+//  Refusals, and which of them may be folded into a decline
+// ──────────────────────────────────────────────
+
+it('refuses card issuing with the marker that stops it becoming a decline', function (string $method) {
+    // PaymentGatewayRouter rethrows only UnsupportedByGateway and folds everything else into
+    // AuthorizationResult::failed(). These were a bare RuntimeException, so a card-issuing
+    // request misrouted to Stripe was recorded as PaymentIntentFailed — an acquirer decline
+    // for a request no acquirer saw. Stripe Issuing is a separate product: reaching these
+    // means the wrong gateway, not a missing primitive.
+    $thrown = null;
+
+    try {
+        (new StripeGateway)->{$method}();
+    } catch (Throwable $e) {
+        $thrown = $e;
+    }
+
+    expect($thrown)->toBeInstanceOf(UnsupportedByGateway::class)
+        ->and($thrown)->toBeInstanceOf(UnsupportedOperation::class);
+})->with(['issueVirtualCard', 'updateVirtualCard', 'terminateVirtualCard']);
+
+it('refuses an alternative-card refund WITHOUT the marker, so the refund can still fail gracefully', function () {
+    // The deliberate asymmetry. Stripe refunds fine; only redirecting one onto another card is
+    // absent, and PaymentGatewayRouter::refund relies on that falling through its catch as a
+    // failed GatewayResult so the aggregate records RefundFailed and the saga carries on.
+    // Marking it would rethrow instead and break step 2 of that method.
+    $thrown = null;
+
+    try {
+        (new StripeGateway)->retryRefund();
+    } catch (Throwable $e) {
+        $thrown = $e;
+    }
+
+    expect($thrown)->toBeInstanceOf(RuntimeException::class)
+        ->and($thrown)->not->toBeInstanceOf(UnsupportedByGateway::class);
 });

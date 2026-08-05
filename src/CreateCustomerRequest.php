@@ -22,15 +22,16 @@ final class CreateCustomerRequest extends AbstractRequest
     #[Override]
     public function getData(): array
     {
+        // Read off the billing address rather than five discrete keys. Those keys had no
+        // setters, so omnipay dropped every one of them and this request created customers
+        // carrying an email and nothing else — while the caller was already handing over a
+        // whole BillingAddress that had nowhere to land.
+        $address = $this->getBillingAddress();
+        $email = $this->getEmail() !== '' ? $this->getEmail() : (string) ($address?->email ?? '');
+
         return array_filter([
-            'email' => $this->getEmail(),
-            'address' => array_filter([
-                'line1' => $this->getParameter('address'),
-                'city' => $this->getParameter('city'),
-                'country' => $this->getParameter('country'),
-                'postal_code' => $this->getParameter('postal_code'),
-                'state' => $this->getParameter('state'),
-            ]) ?: null,
+            'email' => $email,
+            'address' => $this->formatCustomerAddress($address),
         ]);
     }
 

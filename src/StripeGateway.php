@@ -14,6 +14,7 @@ use Techork\PaymentService\Common\Contract\PaymentInstrument;
 use Techork\PaymentService\Common\ValueObject\BillingAddress;
 use Techork\PaymentService\Common\ValueObject\PaymentMethod;
 use Techork\PaymentService\Gateway\Contract\CustomerRepository;
+use Techork\PaymentService\Gateway\Exception\UnsupportedOperation;
 use Techork\PaymentService\Gateway\Contract\Gateway;
 use Techork\PaymentService\Gateway\Contract\GatewayCredential;
 use Techork\PaymentService\Gateway\Contract\GatewayInstrumentRepository;
@@ -130,6 +131,14 @@ final class StripeGateway extends AbstractGateway implements Gateway
         // refund onto a different card. The closest alternative is
         // Stripe Issuing (separate product, requires onboarding) and is
         // intentionally out of scope here.
+        //
+        // Deliberately NOT UnsupportedOperation, unlike the card methods below.
+        // {@see \Techork\PaymentService\Gateway\Exception\UnsupportedOperation} asks whether a
+        // caller here means a missing primitive for something the gateway otherwise supports,
+        // or a misroute. Stripe refunds fine; only redirecting one onto another card is absent,
+        // and PaymentGatewayRouter::refund relies on that falling through its catch as a failed
+        // GatewayResult so the aggregate records RefundFailed and the saga carries on. Marking
+        // it would rethrow instead and break step 2 of that method.
         throw new RuntimeException(
             'Stripe does not support refunding to an alternative card; '
             .'the refund must return to the original payment source.',
@@ -145,19 +154,31 @@ final class StripeGateway extends AbstractGateway implements Gateway
     #[Override]
     public function issueVirtualCard(array $options = []): AbstractRequest
     {
-        throw new RuntimeException('Stripe does not support virtual card issuance.');
+        throw UnsupportedOperation::forGateway(
+            'stripe',
+            'issueVirtualCard',
+            'Stripe Issuing is a separate product and out of scope here; route card issuing to an issuing gateway.',
+        );
     }
 
     #[Override]
     public function updateVirtualCard(array $options = []): AbstractRequest
     {
-        throw new RuntimeException('Stripe does not support virtual card update.');
+        throw UnsupportedOperation::forGateway(
+            'stripe',
+            'updateVirtualCard',
+            'Stripe Issuing is a separate product and out of scope here; route card issuing to an issuing gateway.',
+        );
     }
 
     #[Override]
     public function terminateVirtualCard(array $options = []): AbstractRequest
     {
-        throw new RuntimeException('Stripe does not support virtual card termination.');
+        throw UnsupportedOperation::forGateway(
+            'stripe',
+            'terminateVirtualCard',
+            'Stripe Issuing is a separate product and out of scope here; route card issuing to an issuing gateway.',
+        );
     }
 
     /**

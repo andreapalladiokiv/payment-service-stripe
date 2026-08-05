@@ -20,6 +20,51 @@ trait StripeRequestParameters
     }
 
     /**
+     * Omnipay applies an option only when a matching `set…()` exists
+     * ({@see \Omnipay\Common\Helper::initialize}), and this one had none — so
+     * `billingAddress` was dropped from every Stripe request that asked for it.
+     * PurchaseRequest, AuthorizeRequest and CreatePaymentMethodRequest all read the
+     * parameter to build `billing_details`, which means every Stripe payment went out
+     * with no billing details at all: nothing for the issuer to run AVS or a postal-code
+     * check against, and nothing to explain why those checks came back Unchecked.
+     */
+    public function setBillingAddress(?BillingAddress $value): static
+    {
+        return $this->setParameter('billingAddress', $value);
+    }
+
+    public function getBillingAddress(): ?BillingAddress
+    {
+        $address = $this->getParameter('billingAddress');
+
+        return $address instanceof BillingAddress ? $address : null;
+    }
+
+    /**
+     * The `address` block of a Stripe Customer, or null when there is nothing to say.
+     *
+     * Null rather than an empty array on purpose: Stripe reads `address: {}` as an
+     * instruction to CLEAR the stored address, so sending one for a customer we simply know
+     * nothing new about would erase what is already there.
+     *
+     * @return array<string, string>|null
+     */
+    protected function formatCustomerAddress(?BillingAddress $address): ?array
+    {
+        if ($address === null) {
+            return null;
+        }
+
+        return array_filter([
+            'line1' => $address->line,
+            'city' => $address->city,
+            'country' => (string) $address->country,
+            'postal_code' => $address->postalCode,
+            'state' => $address->state !== null ? (string) $address->state : null,
+        ]) ?: null;
+    }
+
+    /**
      * `static`, not `self`: this overrides {@see \Omnipay\Common\Message\AbstractRequest::setMoney},
      * which is annotated `@return $this`. Naming the using class instead would promise a
      * fixed type where the parent promises the called one.
