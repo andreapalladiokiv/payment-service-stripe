@@ -17,7 +17,6 @@ use Techork\PaymentService\Common\ValueObject\Challenge\RedirectChallenge;
 use Techork\PaymentService\Common\ValueObject\CreditCard;
 use Techork\PaymentService\Common\ValueObject\HostedPayment;
 use Techork\PaymentService\Common\ValueObject\PaymentMethod;
-use Techork\PaymentService\Common\ValueObject\Challenge\ThreeDSChallenge;
 use Techork\PaymentService\Common\ValueObject\Token;
 use Techork\PaymentService\Gateway\Concern\InstrumentParameters;
 use Techork\PaymentService\Gateway\Contract\GatewayCredential;
@@ -183,14 +182,7 @@ final class PurchaseRequest extends AbstractRequest implements PaymentInstrument
 
             $paymentIntent = $stripe->paymentIntents->create($params, $this->stripeOpts());
 
-            $challenge = null;
-            if ($paymentIntent->status === 'requires_action') {
-                $challenge = new ThreeDSChallenge(
-                    transactionId: $paymentIntent->id,
-                    acsUrl: $paymentIntent->next_action?->redirect_to_url?->url,
-                    clientSecret: $paymentIntent->client_secret,
-                );
-            }
+            $challenge = StripeChallenge::from($paymentIntent);
 
             return new PurchaseResponse($this, [
                 'reference' => $paymentIntent->id,

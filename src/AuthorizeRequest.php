@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace Techork\PaymentService\Stripe;
 
 use Override;
-use Techork\PaymentService\Common\ValueObject\Challenge\ThreeDSChallenge;
 use Techork\PaymentService\Gateway\Concern\InstrumentParameters;
 use Techork\PaymentService\Stripe\Concern\ExtractsCardChecks;
 use Techork\PaymentService\Stripe\Concern\FormatsThreeDS;
@@ -173,14 +172,7 @@ final class AuthorizeRequest extends AbstractRequest implements PaymentInstrumen
 
             $paymentIntent = $stripe->paymentIntents->create($params, $this->stripeOpts());
 
-            $challenge = null;
-            if ($paymentIntent->status === 'requires_action') {
-                $challenge = new ThreeDSChallenge(
-                    transactionId: $paymentIntent->id,
-                    acsUrl: $paymentIntent->next_action?->redirect_to_url?->url,
-                    clientSecret: $paymentIntent->client_secret,
-                );
-            }
+            $challenge = StripeChallenge::from($paymentIntent);
 
             return new AuthorizeResponse($this, [
                 'reference' => $paymentIntent->id,
