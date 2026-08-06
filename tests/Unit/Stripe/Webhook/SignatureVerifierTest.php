@@ -2,6 +2,8 @@
 
 declare(strict_types=1);
 
+use Techork\PaymentService\Gateway\Webhook\Contract\InboundWebhook;
+
 use Nyholm\Psr7\Factory\Psr17Factory;
 use Techork\PaymentService\Gateway\Contract\GatewayCredential;
 use Techork\PaymentService\Stripe\Webhook\SignatureVerifier;
@@ -30,17 +32,19 @@ function stripeCredential(string $secret): GatewayCredential
     };
 }
 
-function signedRequest(string $body, string $secret): Psr\Http\Message\ServerRequestInterface
+function signedRequest(string $body, string $secret): InboundWebhook
 {
     $timestamp = time();
     $signed = $timestamp.'.'.$body;
     $signature = hash_hmac('sha256', $signed, $secret);
     $header = "t={$timestamp},v1={$signature}";
 
-    return (new Psr17Factory)
-        ->createServerRequest('POST', '/webhooks')
-        ->withHeader('Stripe-Signature', $header)
-        ->withBody((new Psr17Factory)->createStream($body));
+    return InboundWebhook::from(
+        (new Psr17Factory)
+            ->createServerRequest('POST', '/webhooks')
+            ->withHeader('Stripe-Signature', $header)
+            ->withBody((new Psr17Factory)->createStream($body)),
+    );
 }
 
 it('accepts a correctly signed Stripe webhook', function () {
@@ -57,7 +61,7 @@ it('rejects when the signing secret is wrong', function () {
 });
 
 it('rejects when the Stripe-Signature header is missing', function () {
-    $request = (new Psr17Factory)->createServerRequest('POST', '/webhooks');
+    $request = InboundWebhook::from((new Psr17Factory)->createServerRequest('POST', '/webhooks'));
 
     expect((new SignatureVerifier)->verify($request, stripeCredential('whsec_test')))->toBeFalse();
 });
@@ -84,10 +88,12 @@ it('rejects when the credential lacks a webhook_signing_key', function () {
     $body = '{}';
     $timestamp = time();
     $sig = hash_hmac('sha256', "{$timestamp}.{$body}", 'x');
-    $request = (new Psr17Factory)
-        ->createServerRequest('POST', '/webhooks')
-        ->withHeader('Stripe-Signature', "t={$timestamp},v1={$sig}")
-        ->withBody((new Psr17Factory)->createStream($body));
+    $request = InboundWebhook::from(
+        (new Psr17Factory)
+            ->createServerRequest('POST', '/webhooks')
+            ->withHeader('Stripe-Signature', "t={$timestamp},v1={$sig}")
+            ->withBody((new Psr17Factory)->createStream($body)),
+    );
 
     expect((new SignatureVerifier)->verify($request, $credential))->toBeFalse();
 });
