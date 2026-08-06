@@ -172,6 +172,12 @@ final class PurchaseRequest extends AbstractRequest implements PaymentInstrument
                 $params['payment_method_data'] = $data['payment_method_data'];
             } else {
                 $params['payment_method'] = $data['payment_method'];
+            }
+
+            // Read from the initiation, not from whether the instrument is stored — the two are
+            // different questions and only one of them is what `off_session` means. See the same
+            // repair in {@see AuthorizeRequest::sendData()}.
+            if ($this->getInitiation()->isMerchantInitiated()) {
                 $params['off_session'] = true;
             }
 

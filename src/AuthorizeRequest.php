@@ -162,6 +162,19 @@ final class AuthorizeRequest extends AbstractRequest implements PaymentInstrumen
                 $params['payment_method_data'] = $data['payment_method_data'];
             } else {
                 $params['payment_method'] = $data['payment_method'];
+            }
+
+            // `off_session` says the cardholder is not there to answer for this payment, and it
+            // used to be set from the wrong fact: whether the instrument was a stored reference
+            // rather than a raw card. Those are different questions. Paying with a saved card in
+            // a live checkout is a cardholder-initiated payment, and declaring it off-session
+            // tells the network the opposite — which is the same misdeclaration in reverse that
+            // an unmarked recurring charge makes, and it costs the same thing: an authentication
+            // exemption claimed where none applies, and a chargeback right the merchant thought
+            // it had.
+            //
+            // `initiation` is the fact, it reaches every request, and it was already here.
+            if ($this->getInitiation()->isMerchantInitiated()) {
                 $params['off_session'] = true;
             }
 
