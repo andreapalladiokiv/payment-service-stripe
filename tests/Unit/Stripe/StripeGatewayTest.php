@@ -239,6 +239,31 @@ it('leaves the customer unset when Stripe reports the payment method has no owne
     expect($request->getCustomerReference())->toBe('');
 });
 
+/**
+ * Email is optional on a {@see BillingAddress}, and it used to decide whether the
+ * instrument got a Stripe Customer at all. A PaymentMethod with no Customer is
+ * single-use — the SetupIntent confirm spends it, and Stripe refuses every later
+ * charge — so an address without an email registered a card nobody could use.
+ */
+it('creates a customer from a billing address that carries no email', function () {
+    fakeStripeHttp(['id' => 'cus_no_email', 'object' => 'customer']);
+
+    $customers = Mockery::mock(CustomerRepository::class);
+    $customers->shouldReceive('findByInstrument')->andReturn(null);
+    $customers->shouldReceive('saveAndAttach')->once();
+
+    $gateway = makeStripeGateway();
+    $gateway->setCustomerRepository($customers);
+
+    $request = $gateway->createPaymentMethod([
+        'gateway' => stripeGatewayCredential(),
+        'instrument' => stripeSavedPaymentMethod(),
+        'billingAddress' => new BillingAddress('Test', 'User', '1 St', 'NYC', new Country('US'), '10001'),
+    ]);
+
+    expect($request->getCustomerReference())->toBe('cus_no_email');
+});
+
 it('falls through gracefully when the Stripe lookup fails', function () {
     $pm = stripeSavedPaymentMethod();
 

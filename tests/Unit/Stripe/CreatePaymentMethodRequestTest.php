@@ -112,3 +112,43 @@ it('throws on payment method instrument', function () {
 
     $request->getData();
 })->throws(RuntimeException::class, 'Cannot create a Stripe PaymentMethod from an existing PaymentMethod');
+
+/**
+ * Registration promises an instrument chargeable again later. Stripe grants that only
+ * to a PaymentMethod attached to a Customer — an unattached one is spent by the
+ * SetupIntent confirm and rejected on every use after. Reporting success here would
+ * store a `pm_xxx` that fails at payment time, where it reads as a decline rather than
+ * as the missing customer it is.
+ */
+it('refuses to register a payment method that would have no customer', function () {
+    $enc = new class implements EncryptInterface { public function encrypt(string $d): string { return $d; } };
+
+    $card = new CreditCard(
+        Number::fromNumber('4242424242424242', $enc),
+        Expiration::fromMonthAndYear(3, 2029),
+        new Holder('John'),
+        Cvc::fromCvc('321', $enc),
+    );
+
+    $credential = new readonly class implements GatewayCredential {
+        public function getId(): GatewayId { return GatewayId::generate(); }
+        public function getGatewayName(): string { return 'Stripe'; }
+        public function getCredentials(): array { return []; }
+    };
+
+    $gw = new StripeGateway;
+    $gw->initialize(['apiKey' => 'sk_test']);
+
+    // No customer repository is wired, so nothing resolves a customerReference.
+    $request = $gw->createPaymentMethod([
+        'instrument' => $card,
+        'gateway' => $credential,
+        'decrypter' => new class implements DecryptInterface { public function decrypt(string $d): string { return $d; } },
+    ]);
+
+    $response = $request->send();
+
+    expect($response->isSuccessful())->toBeFalse()
+        ->and($response->getTransactionReference())->toBeNull()
+        ->and($response->getMessage())->toContain('needs a customer');
+});

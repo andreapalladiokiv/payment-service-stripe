@@ -102,6 +102,19 @@ final class CreatePaymentMethodRequest extends AbstractRequest implements Paymen
     #[Override]
     public function sendData($data): CreatePaymentMethodResponse
     {
+        // Refuse rather than mint an instrument that cannot be reused. Registration
+        // promises a PaymentMethod chargeable again later, and in Stripe that requires a
+        // Customer: an unattached PM is spent by the SetupIntent confirm below and is
+        // rejected on every subsequent use. Creating one anyway would report success and
+        // store a pm_xxx that fails at payment time — far from here, and looking like a
+        // decline rather than like this.
+        if ($data['customerReference'] === '') {
+            return new CreatePaymentMethodResponse($this, [
+                'reference' => null,
+                'error' => 'Stripe registration needs a customer: a PaymentMethod with no customer can only be used once.',
+            ]);
+        }
+
         try {
             $stripe = new StripeClient($this->getApiKey());
 
@@ -109,25 +122,20 @@ final class CreatePaymentMethodRequest extends AbstractRequest implements Paymen
             // the endpoint that first used it. See {@see StripeRequestParameters::stripeOpts}.
             $paymentMethod = $stripe->paymentMethods->create($data['payment_method_data'], $this->stripeOpts('payment_method'));
 
-            if ($data['customerReference'] !== '') {
-                $stripe->paymentMethods->attach($paymentMethod->id, ['customer' => (string) $data['customerReference']]);
-            }
+            $stripe->paymentMethods->attach($paymentMethod->id, ['customer' => (string) $data['customerReference']]);
 
             // Confirm via SetupIntent so Stripe runs AVS/CVC checks against the
-            // card and (when the PM is attached to a customer) saves it for
-            // off-session reuse. `requires_action` is acceptable here — the
+            // card and saves it against the customer for off-session reuse.
+            // `requires_action` is acceptable here — the
             // card itself is saved, and 3DS will be re-challenged at first
             // charge. The PM is then re-retrieved to pick up the checks Stripe
             // populates only after confirmation.
             $setupParams = [
                 'payment_method' => $paymentMethod->id,
+                'customer' => $data['customerReference'],
                 'confirm' => true,
                 'automatic_payment_methods' => ['enabled' => true, 'allow_redirects' => 'never'],
             ];
-
-            if ($data['customerReference'] !== '') {
-                $setupParams['customer'] = $data['customerReference'];
-            }
 
             $paymentMethodOptions = $this->formatThreeDS();
             if ($paymentMethodOptions !== null) {

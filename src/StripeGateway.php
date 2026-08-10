@@ -213,7 +213,15 @@ final class StripeGateway extends AbstractGateway implements Gateway
             return $adopted;
         }
 
-        if ($billingAddress === null || $billingAddress->email === null) {
+        // Email is not a precondition here. Stripe's `customers.create` requires no field
+        // at all, and {@see CreateCustomerRequest::getData} already filters an absent one
+        // out. Gating on it made a missing email — which is optional on our side — decide
+        // whether the instrument gets a Customer, and a PaymentMethod without a Customer
+        // is single-use: the SetupIntent confirm spends it, and Stripe then refuses it
+        // forever with "previously used without being attached to a Customer ... may not
+        // be used again". So an address without an email produced a registration that
+        // recorded a pm_xxx nobody could ever charge.
+        if ($billingAddress === null) {
             return null;
         }
 
