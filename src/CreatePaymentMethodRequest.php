@@ -105,7 +105,9 @@ final class CreatePaymentMethodRequest extends AbstractRequest implements Paymen
         try {
             $stripe = new StripeClient($this->getApiKey());
 
-            $paymentMethod = $stripe->paymentMethods->create($data['payment_method_data'], $this->stripeOpts());
+            // Two endpoints, so two scoped keys — Stripe pins an idempotency key to
+            // the endpoint that first used it. See {@see StripeRequestParameters::stripeOpts}.
+            $paymentMethod = $stripe->paymentMethods->create($data['payment_method_data'], $this->stripeOpts('payment_method'));
 
             if ($data['customerReference'] !== '') {
                 $stripe->paymentMethods->attach($paymentMethod->id, ['customer' => (string) $data['customerReference']]);
@@ -132,7 +134,7 @@ final class CreatePaymentMethodRequest extends AbstractRequest implements Paymen
                 $setupParams['payment_method_options'] = $paymentMethodOptions;
             }
 
-            $stripe->setupIntents->create($setupParams, $this->stripeOpts());
+            $stripe->setupIntents->create($setupParams, $this->stripeOpts('setup_intent'));
 
             $paymentMethod = $stripe->paymentMethods->retrieve($paymentMethod->id);
 

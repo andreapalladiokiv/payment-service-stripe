@@ -126,17 +126,35 @@ trait StripeRequestParameters
      * key (terminal one-shot ops) get an empty array, matching the Stripe
      * SDK's default behavior.
      *
-     * @return array<string, mixed>
-     */
-    /**
+     * `$scope` exists because **Stripe binds an idempotency key to the first
+     * endpoint it was used on** and rejects it everywhere else:
+     *
+     * > Keys for idempotent requests can only be used for the same endpoint
+     * > they were first used for.
+     *
+     * A `sendData()` that calls two endpoints therefore cannot hand both the
+     * bare `clientUniqueId` — the second call fails, and because the id is
+     * stable the failure is permanent: every retry burns on the same
+     * collision and the operation can never complete. Pass a distinct scope
+     * per endpoint in that case; the key stays derived from the same id, so
+     * a retry still lands on the same key and idempotency is preserved.
+     *
+     * Single-endpoint operations pass nothing and keep the bare id — changing
+     * their key would orphan whatever Stripe already cached against it.
+     *
+     * @param  ?string  $scope  endpoint discriminator, for operations that call more than one
      * @return array{idempotency_key?: non-empty-string} the shape Stripe's services declare
      *   for their per-request options argument; a bare `array` made every call site an
      *   unverifiable coercion
      */
-    protected function stripeOpts(): array
+    protected function stripeOpts(?string $scope = null): array
     {
         $key = $this->getClientUniqueId();
 
-        return $key === null || $key === '' ? [] : ['idempotency_key' => $key];
+        if ($key === null || $key === '') {
+            return [];
+        }
+
+        return ['idempotency_key' => $scope === null ? $key : $key.':'.$scope];
     }
 }

@@ -247,7 +247,11 @@ final class PurchaseRequest extends AbstractRequest implements PaymentInstrument
                 $params['customer'] = $data['customer'];
             }
 
-            $session = $stripe->checkout->sessions->create($params, $this->stripeOpts());
+            // Scoped away from the PaymentIntent branch above: both branches run off the
+            // same `clientUniqueId`, and Stripe pins a key to its first endpoint. The two
+            // are mutually exclusive today, which makes the collision latent rather than
+            // absent. See {@see StripeRequestParameters::stripeOpts}.
+            $session = $stripe->checkout->sessions->create($params, $this->stripeOpts('checkout_session'));
 
             // Use the underlying PaymentIntent ID as the gateway reference so
             // the existing payment_intent.succeeded webhook handler can resolve
