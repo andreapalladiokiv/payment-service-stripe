@@ -53,9 +53,15 @@ final class AuthorizeRequest extends AbstractRequest implements PaymentInstrumen
             $data['customer'] = $this->getCustomerReference();
         }
 
+        // `statement_descriptor_suffix`, not `statement_descriptor`: Stripe refuses the
+        // latter on a PaymentIntent whose payment_method_type is `card`, which is every
+        // PaymentIntent this request builds. The account's own prefix supplies the rest
+        // of the descriptor, and the two together are capped at 22 characters — a longer
+        // suffix is rejected rather than truncated here, because shortening what appears
+        // on a cardholder's statement is the caller's decision, not ours.
         $statementDescription = $this->getStatementDescription();
         if ($statementDescription !== null && $statementDescription !== '') {
-            $data['statement_descriptor'] = $statementDescription;
+            $data['statement_descriptor_suffix'] = $statementDescription;
         }
 
         $description = $this->getDescription();
@@ -150,8 +156,8 @@ final class AuthorizeRequest extends AbstractRequest implements PaymentInstrumen
                 $params['customer'] = $data['customer'];
             }
 
-            if (isset($data['statement_descriptor'])) {
-                $params['statement_descriptor'] = $data['statement_descriptor'];
+            if (isset($data['statement_descriptor_suffix'])) {
+                $params['statement_descriptor_suffix'] = $data['statement_descriptor_suffix'];
             }
 
             if (isset($data['description'])) {

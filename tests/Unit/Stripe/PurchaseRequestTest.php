@@ -174,7 +174,7 @@ it('stores threeDS parameter when provided', function () {
         ->and($data['payment_method_data']['type'])->toBe('card');
 });
 
-it('includes statement_descriptor when statementDescription is set', function () {
+it('includes statement_descriptor_suffix when statementDescription is set', function () {
     $enc = new class implements EncryptInterface
     {
         public function encrypt(string $d): string
@@ -205,7 +205,9 @@ it('includes statement_descriptor when statementDescription is set', function ()
         'statementDescription' => 'ACME Trip 42',
     ]);
 
-    expect($request->getData()['statement_descriptor'])->toBe('ACME Trip 42');
+    // See the same assertion in AuthorizeRequestTest — the bare key fails the call.
+    expect($request->getData()['statement_descriptor_suffix'])->toBe('ACME Trip 42')
+        ->and($request->getData())->not->toHaveKey('statement_descriptor');
 });
 
 it('builds hosted-checkout marker data for HostedPayment instrument', function () {

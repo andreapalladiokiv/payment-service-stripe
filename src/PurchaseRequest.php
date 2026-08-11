@@ -59,9 +59,11 @@ final class PurchaseRequest extends AbstractRequest implements PaymentInstrument
             $data['customer'] = $this->getCustomerReference();
         }
 
+        // Suffix, not the whole descriptor — Stripe rejects `statement_descriptor` on a
+        // card PaymentIntent. Same reasoning as {@see AuthorizeRequest::getData()}.
         $statementDescription = $this->getStatementDescription();
         if ($statementDescription !== null && $statementDescription !== '') {
-            $data['statement_descriptor'] = $statementDescription;
+            $data['statement_descriptor_suffix'] = $statementDescription;
         }
 
         $description = $this->getDescription();
@@ -160,8 +162,8 @@ final class PurchaseRequest extends AbstractRequest implements PaymentInstrument
                 $params['customer'] = $data['customer'];
             }
 
-            if (isset($data['statement_descriptor'])) {
-                $params['statement_descriptor'] = $data['statement_descriptor'];
+            if (isset($data['statement_descriptor_suffix'])) {
+                $params['statement_descriptor_suffix'] = $data['statement_descriptor_suffix'];
             }
 
             if (isset($data['description'])) {

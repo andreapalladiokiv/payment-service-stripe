@@ -175,7 +175,7 @@ it('includes customer reference when provided', function () {
     expect($data['customer'])->toBe('cus_abc');
 });
 
-it('includes statement_descriptor when statementDescription is set', function () {
+it('includes statement_descriptor_suffix when statementDescription is set', function () {
     $request = stripeGateway()->authorize([
         'money' => new Money(5000, new Currency('USD')),
         'instrument' => testCard(),
@@ -184,10 +184,14 @@ it('includes statement_descriptor when statementDescription is set', function ()
         'statementDescription' => 'ACME Trip 42',
     ]);
 
-    expect($request->getData()['statement_descriptor'])->toBe('ACME Trip 42');
+    // The bare `statement_descriptor` must not come back: Stripe rejects the whole
+    // PaymentIntent for a card when it is present, so a revert here fails every payment
+    // carrying a descriptor rather than degrading what shows on the statement.
+    expect($request->getData()['statement_descriptor_suffix'])->toBe('ACME Trip 42')
+        ->and($request->getData())->not->toHaveKey('statement_descriptor');
 });
 
-it('omits statement_descriptor when statementDescription is null or empty', function () {
+it('omits statement_descriptor_suffix when statementDescription is null or empty', function () {
     $request = stripeGateway()->authorize([
         'money' => new Money(5000, new Currency('USD')),
         'instrument' => testCard(),
@@ -196,7 +200,7 @@ it('omits statement_descriptor when statementDescription is null or empty', func
         'statementDescription' => '',
     ]);
 
-    expect($request->getData())->not->toHaveKey('statement_descriptor');
+    expect($request->getData())->not->toHaveKey('statement_descriptor_suffix');
 });
 
 it('throws on cash instrument', function () {
