@@ -38,7 +38,16 @@ final readonly class StripeChallenge
             return null;
         }
 
-        $url = $paymentIntent->next_action?->redirect_to_url?->url;
+        // Ask what the action is before reaching for the address. Stripe's SDK answers an
+        // unknown property with a logged notice, so reading `redirect_to_url` off a
+        // `use_stripe_sdk` action wrote a line of noise for every 3DS payment — on exactly
+        // the path where the log is worth reading.
+        $nextAction = $paymentIntent->next_action;
+        if ($nextAction === null || $nextAction->type !== 'redirect_to_url') {
+            return null;
+        }
+
+        $url = $nextAction->redirect_to_url?->url;
 
         if (! is_string($url) || $url === '') {
             return null;
