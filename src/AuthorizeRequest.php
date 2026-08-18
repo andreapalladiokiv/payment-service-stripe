@@ -8,6 +8,7 @@ use Override;
 use Techork\PaymentService\Gateway\Concern\InstrumentParameters;
 use Techork\PaymentService\Stripe\Concern\ExtractsCardChecks;
 use Techork\PaymentService\Stripe\Concern\FormatsThreeDS;
+use Techork\PaymentService\Stripe\Concern\ReadsPaymentIntentOutcome;
 use Techork\PaymentService\Stripe\Concern\StripeRequestParameters;
 use Techork\PaymentService\Gateway\Contract\GatewayCredential;
 use Money\Money;
@@ -31,6 +32,7 @@ final class AuthorizeRequest extends AbstractRequest implements PaymentInstrumen
 {
     use ExtractsCardChecks;
     use FormatsThreeDS;
+    use ReadsPaymentIntentOutcome;
     use InstrumentParameters;
     use StripeRequestParameters;
 
@@ -148,7 +150,10 @@ final class AuthorizeRequest extends AbstractRequest implements PaymentInstrumen
                 'currency' => $data['currency'],
                 'capture_method' => 'manual',
                 'confirm' => true,
-                'automatic_payment_methods' => ['enabled' => true, 'allow_redirects' => 'never'],
+                // `never` unless the caller gave somewhere to come back to. Refusing
+                // redirects is what leaves Stripe with only `use_stripe_sdk` to offer for a
+                // card owing 3DS — an action this package cannot present.
+                'automatic_payment_methods' => ['enabled' => true, 'allow_redirects' => $this->normalizedReturnUrl() === null ? 'never' : 'always'],
                 'expand' => ['payment_method'],
             ];
 
@@ -189,14 +194,20 @@ final class AuthorizeRequest extends AbstractRequest implements PaymentInstrumen
                 $params['payment_method_options'] = $paymentMethodOptions;
             }
 
+            $returnUrl = $this->normalizedReturnUrl();
+            if ($returnUrl !== null) {
+                $params['return_url'] = $returnUrl;
+            }
+
             $paymentIntent = $stripe->paymentIntents->create($params, $this->stripeOpts());
 
             $challenge = StripeChallenge::from($paymentIntent);
 
             return new AuthorizeResponse($this, [
                 'reference' => $paymentIntent->id,
+                'status' => $paymentIntent->status,
                 'challenge' => $challenge,
-                'error' => null,
+                'error' => $this->explainUnusableOutcome($paymentIntent, $challenge, 'requires_capture'),
                 ...$this->extractStripeChecks($paymentIntent->payment_method instanceof \Stripe\PaymentMethod ? $paymentIntent->payment_method : null),
             ]);
         } catch (ApiErrorException $e) {

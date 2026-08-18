@@ -84,6 +84,29 @@ trait StripeRequestParameters
         return $this->setParameter('clientUniqueId', $value);
     }
 
+    /**
+     * Where Stripe sends the cardholder back after an authentication it hosts.
+     *
+     * The parameter is omnipay's own — the setter comes from
+     * {@see \Omnipay\Common\Message\AbstractRequest::setReturnUrl} and takes it off the
+     * request bag like any other. This reads it rather than overriding `getReturnUrl()`,
+     * which omnipay annotates `@return string` although it returns whatever the bag holds:
+     * a caller that left it out and a caller that passed an empty string are the one
+     * answer here, and it is null.
+     *
+     * Optional, and the caller's to decide — a hosted checkout returns to its own page, an
+     * API caller may have nowhere to return to at all. Supplying it is also what makes
+     * Stripe answer a 3DS card with `next_action.redirect_to_url` rather than
+     * `use_stripe_sdk`: the second conducts the authentication inside Stripe.js, which this
+     * package does not drive, and there is no address to hand anyone.
+     */
+    protected function normalizedReturnUrl(): ?string
+    {
+        $url = $this->getParameter('returnUrl');
+
+        return is_string($url) && $url !== '' ? $url : null;
+    }
+
     public function setStatementDescription(?string $value): self
     {
         return $this->setParameter('statementDescription', $value);

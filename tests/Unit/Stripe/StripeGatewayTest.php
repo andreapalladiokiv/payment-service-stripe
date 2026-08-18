@@ -6,6 +6,10 @@ use Stripe\ApiRequestor;
 use Stripe\HttpClient\ClientInterface;
 use Stripe\HttpClient\CurlClient;
 use Techork\PaymentService\Common\ValueObject\BillingAddress;
+use Money\Currency;
+use Money\Money;
+use Techork\PaymentService\Common\Contract\DecryptInterface;
+use Techork\PaymentService\Common\Contract\EncryptInterface;
 use Techork\PaymentService\Common\ValueObject\CardBrand;
 use Techork\PaymentService\Common\ValueObject\Country;
 use Techork\PaymentService\Common\ValueObject\CreditCard;
@@ -325,4 +329,186 @@ it('refuses an alternative-card refund WITHOUT the marker, so the refund can sti
 
     expect($thrown)->toBeInstanceOf(RuntimeException::class)
         ->and($thrown)->not->toBeInstanceOf(UnsupportedByGateway::class);
+});
+
+// ──────────────────────────────────────────────
+//  requires_action is not an authorization
+// ──────────────────────────────────────────────
+
+function stripeAuthorizeAgainst(array $paymentIntent): \Omnipay\Common\Message\ResponseInterface
+{
+    fakeStripeHttp($paymentIntent);
+
+    $encrypter = new class implements EncryptInterface { public function encrypt(string $d): string { return $d; } };
+    $decrypter = new class implements DecryptInterface { public function decrypt(string $d): string { return $d; } };
+
+    $gateway = makeStripeGateway();
+
+    return $gateway->authorize([
+        'money' => new Money(5000, new Currency('USD')),
+        'instrument' => new CreditCard(
+            Number::fromNumber('4000000000003184', $encrypter),
+            Expiration::fromMonthAndYear(3, 2029),
+            new Holder('John'),
+            Cvc::fromCvc('321', $encrypter),
+        ),
+        'gateway' => stripeGatewayCredential(),
+        'decrypter' => $decrypter,
+    ])->send();
+}
+
+/**
+ * The card is held only when Stripe says `requires_capture`. It answered
+ * `requires_action` and the id was read as proof of an authorization, so the caller
+ * booked money it did not have and found out at capture — by then the run that could
+ * have sent the cardholder to their issuer was already over.
+ */
+it('does not report an authorization for a payment intent still owing an action', function () {
+    $response = stripeAuthorizeAgainst([
+        'id' => 'pi_needs_action',
+        'object' => 'payment_intent',
+        'status' => 'requires_action',
+        'next_action' => ['type' => 'use_stripe_sdk', 'use_stripe_sdk' => ['type' => 'three_d_secure_redirect']],
+    ]);
+
+    expect($response->isSuccessful())->toBeFalse();
+});
+
+/**
+ * And it must say which shape it could not act on. `use_stripe_sdk` means the
+ * authentication happens inside Stripe.js, which this package does not drive — a
+ * fact the caller can only learn if it is written down.
+ */
+it('names the action it cannot describe', function () {
+    $response = stripeAuthorizeAgainst([
+        'id' => 'pi_needs_action',
+        'object' => 'payment_intent',
+        'status' => 'requires_action',
+        'next_action' => ['type' => 'use_stripe_sdk', 'use_stripe_sdk' => ['type' => 'three_d_secure_redirect']],
+    ]);
+
+    expect($response->getMessage())->toContain('use_stripe_sdk');
+});
+
+it('offers the step-up when Stripe hands back somewhere to send the cardholder', function () {
+    $response = stripeAuthorizeAgainst([
+        'id' => 'pi_redirecting',
+        'object' => 'payment_intent',
+        'status' => 'requires_action',
+        'next_action' => [
+            'type' => 'redirect_to_url',
+            'redirect_to_url' => ['url' => 'https://hooks.stripe.com/3d_secure/authenticate', 'return_url' => 'https://merchant.example/back'],
+        ],
+    ]);
+
+    expect($response->getChallenge())->not->toBeNull()
+        ->and($response->getChallenge()->url)->toBe('https://hooks.stripe.com/3d_secure/authenticate');
+});
+
+it('reports an authorization once the money is actually held', function () {
+    $response = stripeAuthorizeAgainst([
+        'id' => 'pi_held',
+        'object' => 'payment_intent',
+        'status' => 'requires_capture',
+    ]);
+
+    expect($response->isSuccessful())->toBeTrue()
+        ->and($response->getTransactionReference())->toBe('pi_held');
+});
+
+/**
+ * Records what was actually sent to Stripe, which is the only way to tell a parameter
+ * that was built from one that was dropped on the way.
+ */
+function recordingStripeHttp(array $body): object
+{
+    $recorder = new class
+    {
+        public array $params = [];
+    };
+
+    ApiRequestor::setHttpClient(new readonly class($body, $recorder) implements ClientInterface
+    {
+        public function __construct(private array $body, private object $recorder) {}
+
+        public function request($method, $absUrl, $headers, $params, $hasFile, $apiMode = 'v1', $maxNetworkRetries = null): array
+        {
+            $this->recorder->params = is_array($params) ? $params : [];
+
+            return [json_encode($this->body), 200, []];
+        }
+    });
+
+    return $recorder;
+}
+
+function stripeAuthorizeWith(array $options): object
+{
+    $recorder = recordingStripeHttp(['id' => 'pi_x', 'object' => 'payment_intent', 'status' => 'requires_capture']);
+
+    $encrypter = new class implements EncryptInterface { public function encrypt(string $d): string { return $d; } };
+
+    makeStripeGateway()->authorize([
+        'money' => new Money(5000, new Currency('USD')),
+        'instrument' => new CreditCard(
+            Number::fromNumber('4000000000003184', $encrypter),
+            Expiration::fromMonthAndYear(3, 2029),
+            new Holder('John'),
+            Cvc::fromCvc('321', $encrypter),
+        ),
+        'gateway' => stripeGatewayCredential(),
+        'decrypter' => new class implements DecryptInterface { public function decrypt(string $d): string { return $d; } },
+        ...$options,
+    ])->send();
+
+    return $recorder;
+}
+
+/**
+ * Refusing redirects is what left Stripe with only `use_stripe_sdk` to offer a card owing
+ * 3DS. Given somewhere to come back to, it may answer with an address instead — which is
+ * the one shape this package can put in front of a cardholder.
+ */
+it('lets Stripe answer with a redirect once the caller says where to come back to', function () {
+    $recorder = stripeAuthorizeWith(['returnUrl' => 'https://merchant.example/checkout/back']);
+
+    expect($recorder->params['return_url'])->toBe('https://merchant.example/checkout/back')
+        ->and($recorder->params['automatic_payment_methods']['allow_redirects'])->toBe('always');
+});
+
+it('refuses redirects when the caller named nowhere to return to', function () {
+    $recorder = stripeAuthorizeWith([]);
+
+    expect($recorder->params)->not->toHaveKey('return_url')
+        ->and($recorder->params['automatic_payment_methods']['allow_redirects'])->toBe('never');
+});
+
+/**
+ * The charge path was built the same way and broke the same way — `PurchaseRequest`
+ * reported success from the presence of an id too.
+ */
+it('does not report a charge for a payment intent still owing an action', function () {
+    fakeStripeHttp([
+        'id' => 'pi_needs_action',
+        'object' => 'payment_intent',
+        'status' => 'requires_action',
+        'next_action' => ['type' => 'use_stripe_sdk', 'use_stripe_sdk' => ['type' => 'three_d_secure_redirect']],
+    ]);
+
+    $encrypter = new class implements EncryptInterface { public function encrypt(string $d): string { return $d; } };
+
+    $response = makeStripeGateway()->purchase([
+        'money' => new Money(5000, new Currency('USD')),
+        'instrument' => new CreditCard(
+            Number::fromNumber('4000000000003184', $encrypter),
+            Expiration::fromMonthAndYear(3, 2029),
+            new Holder('John'),
+            Cvc::fromCvc('321', $encrypter),
+        ),
+        'gateway' => stripeGatewayCredential(),
+        'decrypter' => new class implements DecryptInterface { public function decrypt(string $d): string { return $d; } },
+    ])->send();
+
+    expect($response->isSuccessful())->toBeFalse()
+        ->and($response->getMessage())->toContain('use_stripe_sdk');
 });

@@ -23,6 +23,7 @@ use Techork\PaymentService\Gateway\Contract\GatewayCredential;
 use Techork\PaymentService\Gateway\Exception\UnsupportedInstrument;
 use Techork\PaymentService\Stripe\Concern\ExtractsCardChecks;
 use Techork\PaymentService\Stripe\Concern\FormatsThreeDS;
+use Techork\PaymentService\Stripe\Concern\ReadsPaymentIntentOutcome;
 use Techork\PaymentService\Stripe\Concern\ExtractsConvertedAmount;
 use Techork\PaymentService\Stripe\Concern\StripeRequestParameters;
 
@@ -36,6 +37,7 @@ final class PurchaseRequest extends AbstractRequest implements PaymentInstrument
 {
     use ExtractsCardChecks;
     use FormatsThreeDS;
+    use ReadsPaymentIntentOutcome;
     use ExtractsConvertedAmount;
     use InstrumentParameters;
     use StripeRequestParameters;
@@ -154,7 +156,10 @@ final class PurchaseRequest extends AbstractRequest implements PaymentInstrument
                 'amount' => $data['amount'],
                 'currency' => $data['currency'],
                 'confirm' => true,
-                'automatic_payment_methods' => ['enabled' => true, 'allow_redirects' => 'never'],
+                // `never` unless the caller gave somewhere to come back to. Refusing
+                // redirects is what leaves Stripe with only `use_stripe_sdk` to offer for a
+                // card owing 3DS — an action this package cannot present.
+                'automatic_payment_methods' => ['enabled' => true, 'allow_redirects' => $this->normalizedReturnUrl() === null ? 'never' : 'always'],
                 'expand' => ['payment_method', 'latest_charge.balance_transaction'],
             ];
 
@@ -188,14 +193,20 @@ final class PurchaseRequest extends AbstractRequest implements PaymentInstrument
                 $params['payment_method_options'] = $paymentMethodOptions;
             }
 
+            $returnUrl = $this->normalizedReturnUrl();
+            if ($returnUrl !== null) {
+                $params['return_url'] = $returnUrl;
+            }
+
             $paymentIntent = $stripe->paymentIntents->create($params, $this->stripeOpts());
 
             $challenge = StripeChallenge::from($paymentIntent);
 
             return new PurchaseResponse($this, [
                 'reference' => $paymentIntent->id,
+                'status' => $paymentIntent->status,
                 'challenge' => $challenge,
-                'error' => null,
+                'error' => $this->explainUnusableOutcome($paymentIntent, $challenge, 'succeeded'),
                 'converted_amount' => $this->extractConvertedAmount($paymentIntent),
                 ...$this->extractStripeChecks($paymentIntent->payment_method instanceof \Stripe\PaymentMethod ? $paymentIntent->payment_method : null),
             ]);

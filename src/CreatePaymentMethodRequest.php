@@ -124,12 +124,22 @@ final class CreatePaymentMethodRequest extends AbstractRequest implements Paymen
 
             $stripe->paymentMethods->attach($paymentMethod->id, ['customer' => (string) $data['customerReference']]);
 
-            // Confirm via SetupIntent so Stripe runs AVS/CVC checks against the
-            // card and saves it against the customer for off-session reuse.
-            // `requires_action` is acceptable here — the
-            // card itself is saved, and 3DS will be re-challenged at first
-            // charge. The PM is then re-retrieved to pick up the checks Stripe
-            // populates only after confirmation.
+            // Confirm via SetupIntent so Stripe runs AVS/CVC checks against the card and
+            // saves it against the customer for off-session reuse. The PM is then
+            // re-retrieved to pick up the checks Stripe populates only after confirmation.
+            //
+            // `requires_action` is acceptable here because the card is already attached —
+            // that happened above, before this call — so it is chargeable with the
+            // cardholder present, and the 3DS Stripe wanted is re-challenged at the first
+            // charge. That last part is only true now that {@see AuthorizeResponse} reads
+            // success off the status: a re-challenge used to come back as a completed
+            // authorization, which is exactly how a card registered this way went on to be
+            // captured without ever having been authorized.
+            //
+            // What it does not buy is an off-session charge. A merchant-initiated payment
+            // on a card whose set-up never completed can still be refused for want of
+            // authentication, and `RegistrationResult` has no way to say "usable while the
+            // cardholder is here".
             $setupParams = [
                 'payment_method' => $paymentMethod->id,
                 'customer' => $data['customerReference'],
