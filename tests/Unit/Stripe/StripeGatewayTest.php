@@ -442,13 +442,18 @@ function recordingStripeHttp(array $body): object
     return $recorder;
 }
 
-function stripeAuthorizeWith(array $options): object
+function stripeAuthorizeWith(array $credentials): object
 {
     $recorder = recordingStripeHttp(['id' => 'pi_x', 'object' => 'payment_intent', 'status' => 'requires_capture']);
 
     $encrypter = new class implements EncryptInterface { public function encrypt(string $d): string { return $d; } };
 
-    makeStripeGateway()->authorize([
+    // Through `initialize`, which is what GatewayFactory does with a credential's config —
+    // the only route these settings take in production.
+    $gateway = new StripeGateway;
+    $gateway->initialize(['apiKey' => 'sk_test_fake', ...$credentials]);
+
+    $gateway->authorize([
         'money' => new Money(5000, new Currency('USD')),
         'instrument' => new CreditCard(
             Number::fromNumber('4000000000003184', $encrypter),
@@ -458,7 +463,6 @@ function stripeAuthorizeWith(array $options): object
         ),
         'gateway' => stripeGatewayCredential(),
         'decrypter' => new class implements DecryptInterface { public function decrypt(string $d): string { return $d; } },
-        ...$options,
     ])->send();
 
     return $recorder;
@@ -511,4 +515,86 @@ it('does not report a charge for a payment intent still owing an action', functi
 
     expect($response->isSuccessful())->toBeFalse()
         ->and($response->getMessage())->toContain('use_stripe_sdk');
+});
+
+// ──────────────────────────────────────────────
+//  the SDK shape becomes an address like everyone else's
+// ──────────────────────────────────────────────
+
+function stripeSdkActionIntent(): array
+{
+    return [
+        'id' => 'pi_needs_sdk',
+        'object' => 'payment_intent',
+        'status' => 'requires_action',
+        'next_action' => [
+            'type' => 'use_stripe_sdk',
+            'use_stripe_sdk' => [
+                'type' => 'stripe_3ds2_fingerprint',
+                'server_transaction_id' => 'cb533804-6094-4944-8ac4-235c1bbf2c79',
+                'directory_server_name' => 'visa',
+            ],
+        ],
+    ];
+}
+
+function stripeAuthorizeIntentWith(array $body, array $credentials): object
+{
+    fakeStripeHttp($body);
+
+    $encrypter = new class implements EncryptInterface { public function encrypt(string $d): string { return $d; } };
+
+    $gateway = new StripeGateway;
+    $gateway->initialize(['apiKey' => 'sk_test_fake', ...$credentials]);
+
+    return $gateway->authorize([
+        'money' => new Money(5000, new Currency('USD')),
+        'instrument' => new CreditCard(
+            Number::fromNumber('4000002760003184', $encrypter),
+            Expiration::fromMonthAndYear(3, 2029),
+            new Holder('John'),
+            Cvc::fromCvc('321', $encrypter),
+        ),
+        'gateway' => stripeGatewayCredential(),
+        'decrypter' => new class implements DecryptInterface { public function decrypt(string $d): string { return $d; } },
+    ])->send();
+}
+
+/**
+ * Stripe is the only gateway here that answers a 3DS card without an address — ConnexPay
+ * returns `redirectUrl`, Nuvei `acsUrl`, Stripe says "run our JavaScript". Given a page
+ * that does exactly that, the challenge comes back the same shape as everyone else's and
+ * nothing downstream has to know Stripe has two.
+ */
+it('mints an address for the shape Stripe answers without one', function () {
+    $response = stripeAuthorizeIntentWith(stripeSdkActionIntent(), [
+        'authenticationUrl' => 'https://merchant.example/stripe/authenticate',
+    ]);
+
+    expect($response->getChallenge())->not->toBeNull()
+        ->and($response->getChallenge()->url)->toBe('https://merchant.example/stripe/authenticate/pi_needs_sdk')
+        // The protocol's own identifier, which Stripe does publish — better than the
+        // intent id because the directory server keeps it too.
+        ->and($response->getChallenge()->transactionId())->toBe('cb533804-6094-4944-8ac4-235c1bbf2c79')
+        ->and($response->isSuccessful())->toBeFalse();
+});
+
+it('tolerates a trailing slash on the configured page', function () {
+    $response = stripeAuthorizeIntentWith(stripeSdkActionIntent(), [
+        'authenticationUrl' => 'https://merchant.example/stripe/authenticate/',
+    ]);
+
+    expect($response->getChallenge()->url)->toBe('https://merchant.example/stripe/authenticate/pi_needs_sdk');
+});
+
+/**
+ * Configure neither shape and there is nothing to put in front of anyone. That must stay
+ * a refusal — reading it as success is the bug this all started from.
+ */
+it('still refuses the SDK shape when no page is configured to present it', function () {
+    $response = stripeAuthorizeIntentWith(stripeSdkActionIntent(), []);
+
+    expect($response->getChallenge())->toBeNull()
+        ->and($response->isSuccessful())->toBeFalse()
+        ->and($response->getMessage())->toContain('authenticationUrl');
 });

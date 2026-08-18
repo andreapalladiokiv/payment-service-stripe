@@ -150,9 +150,10 @@ final class AuthorizeRequest extends AbstractRequest implements PaymentInstrumen
                 'currency' => $data['currency'],
                 'capture_method' => 'manual',
                 'confirm' => true,
-                // `never` unless the caller gave somewhere to come back to. Refusing
-                // redirects is what leaves Stripe with only `use_stripe_sdk` to offer for a
-                // card owing 3DS — an action this package cannot present.
+                // `never` unless the credential named a return address. Refusing redirects
+                // leaves Stripe with only `use_stripe_sdk` to offer a card owing 3DS, which
+                // is fine — that shape is presentable too, on the page the credential names
+                // in `authenticationUrl`. Configure neither and there is nothing to show.
                 'automatic_payment_methods' => ['enabled' => true, 'allow_redirects' => $this->normalizedReturnUrl() === null ? 'never' : 'always'],
                 'expand' => ['payment_method'],
             ];
@@ -201,7 +202,7 @@ final class AuthorizeRequest extends AbstractRequest implements PaymentInstrumen
 
             $paymentIntent = $stripe->paymentIntents->create($params, $this->stripeOpts());
 
-            $challenge = StripeChallenge::from($paymentIntent);
+            $challenge = StripeChallenge::from($paymentIntent, $this->normalizedAuthenticationUrl());
 
             return new AuthorizeResponse($this, [
                 'reference' => $paymentIntent->id,

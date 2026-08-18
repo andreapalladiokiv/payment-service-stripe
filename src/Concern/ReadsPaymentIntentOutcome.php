@@ -44,8 +44,9 @@ trait ReadsPaymentIntentOutcome
             $type = $paymentIntent->next_action?->type;
 
             return sprintf(
-                'Stripe left the payment intent at `requires_action` with next_action `%s`, which this integration cannot present. '
-                .'Pass a return_url so Stripe answers with `redirect_to_url`, or drive the authentication with Stripe.js.',
+                'Stripe left the payment intent at `requires_action` with next_action `%s`, and this gateway is configured '
+                .'to present neither shape. Give the credential an `authenticationUrl` for the page that runs Stripe.js, '
+                .'or a `returnUrl` so Stripe hosts the step-up itself.',
                 is_string($type) && $type !== '' ? $type : 'unset',
             );
         }

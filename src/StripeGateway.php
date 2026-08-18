@@ -62,6 +62,51 @@ final class StripeGateway extends AbstractGateway implements Gateway
         return $this->createRequest(UpdateCustomerRequest::class, $parameters);
     }
 
+    /**
+     * Where this deployment hosts the page that conducts a Stripe-side authentication.
+     *
+     * Configuration, not a payment parameter: it is a property of the deployment the way a
+     * webhook address is, the same for every payment, and it has no business in a
+     * gateway-agnostic `authorize()` signature. It arrives through the credential —
+     * {@see \Techork\PaymentService\Gateway\GatewayFactory} hands
+     * `$credential->getCredentials()` to `initialize()`, and omnipay merges gateway
+     * parameters into every request it builds.
+     *
+     * Needed because Stripe is the one gateway that does not answer a 3DS card with an
+     * address. ConnexPay returns `redirectUrl` and Nuvei returns `acsUrl`; Stripe answers
+     * `use_stripe_sdk`, which means "run our JavaScript" and has no address at all. So one
+     * is minted here, pointing at a page that loads Stripe.js — and the challenge comes
+     * back the same shape as every other gateway's.
+     *
+     * A setter is what makes it arrive: omnipay applies a credential key only when a
+     * matching `set…()` exists ({@see \Omnipay\Common\Helper::initialize}), and drops it
+     * in silence otherwise.
+     */
+    public function setAuthenticationUrl(?string $value): self
+    {
+        return $this->setParameter('authenticationUrl', $value);
+    }
+
+    public function getAuthenticationUrl(): ?string
+    {
+        $url = $this->getParameter('authenticationUrl');
+
+        return is_string($url) && $url !== '' ? $url : null;
+    }
+
+    /**
+     * Where Stripe brings the cardholder back after an authentication IT hosts.
+     *
+     * Configuration for the same reason, and the alternative to the page above: given one,
+     * Stripe answers `redirect_to_url` and hosts the challenge itself. Leaving it unset is
+     * the ordinary case — omnipay's `AbstractRequest` already carries the parameter down,
+     * so only this gateway-level setter is needed for a credential to name it.
+     */
+    public function setReturnUrl(?string $value): self
+    {
+        return $this->setParameter('returnUrl', $value);
+    }
+
     public function createCard(array $options = []): AbstractRequest
     {
         return $this->createRequest(CreateCardRequest::class, $options);

@@ -100,6 +100,22 @@ trait StripeRequestParameters
      * `use_stripe_sdk`: the second conducts the authentication inside Stripe.js, which this
      * package does not drive, and there is no address to hand anyone.
      */
+    /**
+     * Set from the credential, so omnipay needs a setter here for the merged gateway
+     * parameter to survive {@see \Omnipay\Common\Helper::initialize} on the request.
+     */
+    public function setAuthenticationUrl(?string $value): self
+    {
+        return $this->setParameter('authenticationUrl', $value);
+    }
+
+    protected function normalizedAuthenticationUrl(): ?string
+    {
+        $url = $this->getParameter('authenticationUrl');
+
+        return is_string($url) && $url !== '' ? rtrim($url, '/') : null;
+    }
+
     protected function normalizedReturnUrl(): ?string
     {
         $url = $this->getParameter('returnUrl');
