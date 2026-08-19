@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace Techork\PaymentService\Stripe;
 
 use Stripe\PaymentIntent;
+use Techork\PaymentService\Common\Contract\Challenge;
+use Techork\PaymentService\Common\ValueObject\Challenge\SdkChallenge;
 use Techork\PaymentService\Common\ValueObject\Challenge\ThreeDSChallenge;
 
 /**
@@ -24,23 +26,23 @@ use Techork\PaymentService\Common\ValueObject\Challenge\ThreeDSChallenge;
  * be reported as no challenge at all. The caller then read the payment as authorized and
  * captured money that was never held.
  *
- * So an address is minted for it, pointing at the page this deployment hosts for exactly
- * this ({@see StripeGateway::setAuthenticationUrl}). The challenge then looks the same
- * whichever shape Stripe chose, and nothing downstream has to know Stripe has two.
+ * It is now reported as itself, {@see SdkChallenge}. Forcing it into an address was the
+ * intermediate step: a url minted from a configured prefix, which obliged the caller to host
+ * a page that only existed to receive it, and refused the payment outright when nothing was
+ * configured. The client secret is not carried either way — see {@see SdkChallenge} for why
+ * a challenge is the wrong place for a credential.
  *
- * The client secret is deliberately NOT carried here. The page is addressed by the
- * payment intent's own id and fetches the secret server-side with the merchant's key, so
- * it reaches the one browser about to authenticate and never the event stream — and
- * {@see ThreeDSChallenge} keeps a url as its point, rather than becoming a carrier for a
- * credential that could confirm the payment outright.
+ * A `use_stripe_sdk` action is describable with nothing configured at all — it is
+ * {@see SdkChallenge}, which carries a handle rather than an address. The configured page and
+ * the return url stay as ways to *choose* a hosted form instead, not as conditions without
+ * which a payment is refused.
  *
- * With neither an authentication page nor a return url configured there is nothing to
- * put in front of anyone, and null is the honest answer. The caller must not read that as
- * success; {@see AuthorizeResponse} decides success from the status for that reason.
+ * Null is reserved for an action shape this package has never seen. The caller must not read
+ * that as success; {@see AuthorizeResponse} decides success from the status for that reason.
  */
 final readonly class StripeChallenge
 {
-    public static function from(PaymentIntent $paymentIntent, ?string $authenticationUrl = null): ?ThreeDSChallenge
+    public static function from(PaymentIntent $paymentIntent, ?string $authenticationUrl = null): ?Challenge
     {
         if ($paymentIntent->status !== 'requires_action') {
             return null;
@@ -56,7 +58,7 @@ final readonly class StripeChallenge
 
         return match ($nextAction->type) {
             'redirect_to_url' => self::hostedByStripe($paymentIntent, $nextAction),
-            'use_stripe_sdk' => self::hostedByUs($paymentIntent, $nextAction, $authenticationUrl),
+            'use_stripe_sdk' => self::conductedBySdk($paymentIntent, $nextAction, $authenticationUrl),
             default => null,
         };
     }
@@ -75,24 +77,31 @@ final readonly class StripeChallenge
         );
     }
 
-    private static function hostedByUs(PaymentIntent $paymentIntent, object $nextAction, ?string $authenticationUrl): ?ThreeDSChallenge
+    private static function conductedBySdk(PaymentIntent $paymentIntent, object $nextAction, ?string $authenticationUrl): Challenge
     {
-        if ($authenticationUrl === null) {
-            return null;
+        // Stripe publishes the protocol's own identifier here — a docblock in this file used
+        // to claim it does not. `server_transaction_id` is the `threeDSServerTransID`, the
+        // value the directory server keeps too, so a later result matches on it. The intent
+        // id stands in if a shape without it ever arrives.
+        $serverTransactionId = $nextAction->use_stripe_sdk?->server_transaction_id;
+        $authenticationId = is_string($serverTransactionId) && $serverTransactionId !== ''
+            ? $serverTransactionId
+            : (string) $paymentIntent->id;
+
+        // A configured page is an opt-in, not a precondition. A caller that would rather
+        // receive an address — because its client only knows how to open one — gets one
+        // minted from the prefix; a caller that has not asked for that gets the shape Stripe
+        // actually answered with, which needs no address at all.
+        if ($authenticationUrl !== null) {
+            return new ThreeDSChallenge(
+                authenticationId: $authenticationId,
+                url: $authenticationUrl.'/'.$paymentIntent->id,
+            );
         }
 
-        // Stripe does publish the protocol's own identifier here — this docblock used to
-        // claim it does not. `server_transaction_id` is the `threeDSServerTransID`, which
-        // is a better handle than the payment intent's id because it is the one the
-        // directory server and any 3DS record keep too. The intent id stands in when a
-        // shape without it arrives, since the page is addressed by that id regardless.
-        $serverTransactionId = $nextAction->use_stripe_sdk?->server_transaction_id;
-
-        return new ThreeDSChallenge(
-            authenticationId: is_string($serverTransactionId) && $serverTransactionId !== ''
-                ? $serverTransactionId
-                : (string) $paymentIntent->id,
-            url: $authenticationUrl.'/'.$paymentIntent->id,
+        return new SdkChallenge(
+            authenticationId: $authenticationId,
+            paymentReference: (string) $paymentIntent->id,
         );
     }
 }

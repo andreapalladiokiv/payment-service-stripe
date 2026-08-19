@@ -25,6 +25,7 @@ use Techork\PaymentService\Gateway\Contract\GatewayInstrumentRepository;
 use Techork\PaymentService\Gateway\Exception\UnsupportedByGateway;
 use Techork\PaymentService\Gateway\Exception\UnsupportedOperation;
 use Techork\PaymentService\Gateway\ValueObject\GatewayId;
+use Techork\PaymentService\Common\ValueObject\Challenge\SdkChallenge;
 use Techork\PaymentService\Stripe\AuthorizeRequest;
 use Techork\PaymentService\Stripe\CaptureRequest;
 use Techork\PaymentService\Stripe\CreateCardRequest;
@@ -375,19 +376,21 @@ it('does not report an authorization for a payment intent still owing an action'
 });
 
 /**
- * And it must say which shape it could not act on. `use_stripe_sdk` means the
- * authentication happens inside Stripe.js, which this package does not drive — a
- * fact the caller can only learn if it is written down.
+ * An action shape this package has never seen is still a refusal, and it must say which
+ * shape it was — the caller can only learn that if it is written down. `use_stripe_sdk` is
+ * no longer one of these: it has its own challenge now.
  */
-it('names the action it cannot describe', function () {
+it('names an action shape it has never seen', function () {
     $response = stripeAuthorizeAgainst([
         'id' => 'pi_needs_action',
         'object' => 'payment_intent',
         'status' => 'requires_action',
-        'next_action' => ['type' => 'use_stripe_sdk', 'use_stripe_sdk' => ['type' => 'three_d_secure_redirect']],
+        'next_action' => ['type' => 'verify_with_microdeposits', 'verify_with_microdeposits' => []],
     ]);
 
-    expect($response->getMessage())->toContain('use_stripe_sdk');
+    expect($response->getChallenge())->toBeNull()
+        ->and($response->isSuccessful())->toBeFalse()
+        ->and($response->getMessage())->toContain('verify_with_microdeposits');
 });
 
 it('offers the step-up when Stripe hands back somewhere to send the cardholder', function () {
@@ -514,7 +517,7 @@ it('does not report a charge for a payment intent still owing an action', functi
     ])->send();
 
     expect($response->isSuccessful())->toBeFalse()
-        ->and($response->getMessage())->toContain('use_stripe_sdk');
+        ->and($response->getChallenge())->toBeInstanceOf(SdkChallenge::class);
 });
 
 // ──────────────────────────────────────────────
@@ -588,13 +591,19 @@ it('tolerates a trailing slash on the configured page', function () {
 });
 
 /**
- * Configure neither shape and there is nothing to put in front of anyone. That must stay
- * a refusal — reading it as success is the bug this all started from.
+ * With no address configured the step-up is still describable, because this shape never
+ * needed an address: the provider's SDK runs it in the payer's browser. It used to be
+ * refused for want of a url it has no use for.
  */
-it('still refuses the SDK shape when no page is configured to present it', function () {
+it('describes the SDK shape without any address configured', function () {
     $response = stripeAuthorizeIntentWith(stripeSdkActionIntent(), []);
 
-    expect($response->getChallenge())->toBeNull()
+    $challenge = $response->getChallenge();
+
+    expect($challenge)->toBeInstanceOf(SdkChallenge::class)
+        ->and($challenge->authenticationId)->toBe('cb533804-6094-4944-8ac4-235c1bbf2c79')
+        ->and($challenge->paymentReference)->toBe('pi_needs_sdk')
+        // Still not an authorization: the money is not held until the payer answers.
         ->and($response->isSuccessful())->toBeFalse()
-        ->and($response->getMessage())->toContain('authenticationUrl');
+        ->and($response->getMessage())->toBeNull();
 });
