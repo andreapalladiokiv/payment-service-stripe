@@ -13,16 +13,20 @@ use Stripe\StripeClient;
 use Techork\PaymentService\Common\Contract\PaymentInstrument;
 use Techork\PaymentService\Common\ValueObject\BillingAddress;
 use Techork\PaymentService\Common\ValueObject\PaymentMethod;
-use Techork\PaymentService\Gateway\Contract\CustomerRepository;
+use Techork\PaymentService\Gateway\Contract\CustomerIdentitySource;
+use Techork\PaymentService\Gateway\Contract\GatewayCustomerRepository;
+use Techork\PaymentService\Gateway\Contract\ResolvesGatewayCustomers;
 use Techork\PaymentService\Gateway\Exception\UnsupportedOperation;
 use Techork\PaymentService\Gateway\Contract\Gateway;
 use Techork\PaymentService\Gateway\Contract\GatewayCredential;
 use Techork\PaymentService\Gateway\Contract\GatewayInstrumentRepository;
 use Techork\PaymentService\Gateway\ValueObject\GatewayId;
 
-final class StripeGateway extends AbstractGateway implements Gateway
+final class StripeGateway extends AbstractGateway implements Gateway, ResolvesGatewayCustomers
 {
-    private ?CustomerRepository $customerRepository = null;
+    private ?GatewayCustomerRepository $gatewayCustomerRepository = null;
+
+    private ?CustomerIdentitySource $customerIdentitySource = null;
 
     #[Override]
     public function getName(): string
@@ -31,9 +35,15 @@ final class StripeGateway extends AbstractGateway implements Gateway
     }
 
     #[Override]
-    public function setCustomerRepository(CustomerRepository $repository): void
+    public function setGatewayCustomerRepository(GatewayCustomerRepository $repository): void
     {
-        $this->customerRepository = $repository;
+        $this->gatewayCustomerRepository = $repository;
+    }
+
+    #[Override]
+    public function setCustomerIdentitySource(CustomerIdentitySource $source): void
+    {
+        $this->customerIdentitySource = $source;
     }
 
     #[Override]
@@ -117,9 +127,7 @@ final class StripeGateway extends AbstractGateway implements Gateway
     {
         $customerReference = $this->resolveCustomerReference(
             $options['gateway'] ?? null,
-            $options['instrument'] ?? null,
-            $options['billingAddress'] ?? null,
-            $options['referenceResolver'] ?? null,
+            $options['customerId'] ?? null,
         );
         if ($customerReference !== null) {
             $options['customerReference'] = $customerReference;
@@ -132,9 +140,7 @@ final class StripeGateway extends AbstractGateway implements Gateway
     {
         $customerReference = $this->resolveCustomerReference(
             $options['gateway'] ?? null,
-            $options['instrument'] ?? null,
-            $options['billingAddress'] ?? null,
-            $options['referenceResolver'] ?? null,
+            $options['customerId'] ?? null,
         );
         if ($customerReference !== null) {
             $options['customerReference'] = $customerReference;
@@ -147,9 +153,7 @@ final class StripeGateway extends AbstractGateway implements Gateway
     {
         $customerReference = $this->resolveCustomerReference(
             $options['gateway'] ?? null,
-            $options['instrument'] ?? null,
-            $options['billingAddress'] ?? null,
-            $options['referenceResolver'] ?? null,
+            $options['customerId'] ?? null,
         );
         if ($customerReference !== null) {
             $options['customerReference'] = $customerReference;
@@ -236,94 +240,63 @@ final class StripeGateway extends AbstractGateway implements Gateway
      * requests means they silently drop the `customer` param — Stripe then
      * rejects the charge with "Please include the customer".
      */
+    /**
+     * Which Stripe Customer one of ours is, creating it the first time.
+     *
+     * This used to be a search standing in for knowing: find by instrument, else ask Stripe who
+     * owns the instrument, else invent a Customer from whatever address rode along with this
+     * payment — so the same person paying from two addresses became two Stripe customers, and a
+     * payment with no address got no Customer and therefore an unusable PaymentMethod.
+     *
+     * All of it is gone, and **not replaced by a fallback**. With no customer named there is no
+     * customer, and null surfaces as a refused registration
+     * ({@see CreatePaymentMethodRequest::sendData()} already refuses without one) rather than as
+     * a Stripe Customer named after one payment's billing details. A silent fallback to the old
+     * behaviour would have made this change optional, and it would have been taken by every
+     * caller that forgot to name the customer.
+     */
     private function resolveCustomerReference(
         ?GatewayCredential $gateway,
-        ?PaymentInstrument $instrument,
-        ?BillingAddress $billingAddress,
-        ?GatewayInstrumentRepository $referenceResolver = null,
+        ?string $customerId = null,
     ): ?string {
-        if ($this->customerRepository === null || $gateway === null || $instrument === null) {
+        if ($gateway === null || $customerId === null || $this->gatewayCustomerRepository === null) {
             return null;
         }
 
         $gatewayId = $gateway->getId();
 
-        $existing = $this->customerRepository->findByInstrument($gatewayId, $instrument);
-        if ($existing !== null && $existing !== '') {
-            return $existing;
-        }
+        return $this->gatewayCustomerRepository->find($gatewayId, $customerId)
+            ?? $this->createCustomerFor($gatewayId, $customerId);
+    }
 
-        $adopted = $this->adoptCustomerFromStripe($gatewayId, $instrument, $referenceResolver);
-        if ($adopted !== null) {
-            return $adopted;
-        }
+    /**
+     * Creates the Stripe Customer for one of ours and remembers which is which.
+     *
+     * Built from the identity the host holds rather than from whatever address rode along with
+     * this payment — that is the difference the customer aggregate buys. With no identity source
+     * bound there is nothing to build one from, and null is the honest answer: it surfaces as a
+     * refused registration rather than as a customer named after one payment's billing details.
+     */
+    private function createCustomerFor(GatewayId $gatewayId, string $customerId): ?string
+    {
+        $identity = $this->customerIdentitySource?->find($customerId);
 
-        // Email is not a precondition here. Stripe's `customers.create` requires no field
-        // at all, and {@see CreateCustomerRequest::getData} already filters an absent one
-        // out. Gating on it made a missing email — which is optional on our side — decide
-        // whether the instrument gets a Customer, and a PaymentMethod without a Customer
-        // is single-use: the SetupIntent confirm spends it, and Stripe then refuses it
-        // forever with "previously used without being attached to a Customer ... may not
-        // be used again". So an address without an email produced a registration that
-        // recorded a pm_xxx nobody could ever charge.
-        if ($billingAddress === null) {
+        if ($identity === null) {
             return null;
         }
 
-        $response = $this->createCustomer(['billingAddress' => $billingAddress])->send();
+        $response = $this->createCustomer(['customerIdentity' => $identity])->send();
 
         if (! $response->isSuccessful()) {
             throw new RuntimeException("Stripe createCustomer failed: {$response->getMessage()}");
         }
 
-        $customerReference = $response->getTransactionReference()
+        $reference = $response->getTransactionReference()
             ?? throw new RuntimeException('Stripe createCustomer returned no reference.');
 
-        $this->customerRepository->saveAndAttach($gatewayId, $instrument, $customerReference);
+        $this->gatewayCustomerRepository?->saveReference($gatewayId, $customerId, $reference);
 
-        return $customerReference;
+        return $reference;
     }
 
-    /**
-     * Recovers the owning customer for an already-registered PaymentMethod
-     * whose local customer link is missing or stale (a crash between the
-     * Stripe attach and the local pivot write, or a webhook-created PM).
-     * Stripe is the source of truth for which customer owns a pm_xxx, so
-     * adopt that owner and repair the local link — minting a fresh customer
-     * here would make `paymentIntents.create` fail either way: with no
-     * `customer` Stripe rejects an attached PM ("Please include the
-     * customer"), and with a different one it rejects the mismatch.
-     */
-    private function adoptCustomerFromStripe(
-        GatewayId $gatewayId,
-        PaymentInstrument $instrument,
-        ?GatewayInstrumentRepository $referenceResolver,
-    ): ?string {
-        if (! $instrument instanceof PaymentMethod) {
-            return null;
-        }
-
-        $reference = $referenceResolver?->find($gatewayId, $instrument);
-        if ($reference === null || $reference === '') {
-            return null;
-        }
-
-        try {
-            $paymentMethod = new StripeClient($this->getApiKey())->paymentMethods->retrieve($reference);
-        } catch (ApiErrorException) {
-            return null;
-        }
-
-        $customerReference = is_object($paymentMethod->customer)
-            ? $paymentMethod->customer->id ?? ''
-            : (string) ($paymentMethod->customer ?? '');
-
-        if ($customerReference === '') {
-            return null;
-        }
-
-        $this->customerRepository?->saveAndAttach($gatewayId, $instrument, $customerReference);
-
-        return $customerReference;
-    }
 }

@@ -19,7 +19,10 @@ use Techork\PaymentService\Common\ValueObject\CreditCard\Holder;
 use Techork\PaymentService\Common\ValueObject\CreditCard\Number;
 use Techork\PaymentService\Common\ValueObject\PaymentMethod;
 use Techork\PaymentService\Common\ValueObject\PaymentMethodId;
-use Techork\PaymentService\Gateway\Contract\CustomerRepository;
+use Techork\PaymentService\Common\ValueObject\CustomerIdentity;
+use Techork\PaymentService\Common\ValueObject\Email;
+use Techork\PaymentService\Gateway\Contract\CustomerIdentitySource;
+use Techork\PaymentService\Gateway\Contract\GatewayCustomerRepository;
 use Techork\PaymentService\Gateway\Contract\GatewayCredential;
 use Techork\PaymentService\Gateway\Contract\GatewayInstrumentRepository;
 use Techork\PaymentService\Gateway\Exception\UnsupportedByGateway;
@@ -151,151 +154,15 @@ afterEach(function () {
     ApiRequestor::setHttpClient(CurlClient::instance());
 });
 
-it('keeps an existing non-empty customer link on purchase', function () {
-    $pm = stripeSavedPaymentMethod();
-
-    $customers = Mockery::mock(CustomerRepository::class);
-    $customers->shouldReceive('findByInstrument')->andReturn('cus_existing');
-    $customers->shouldNotReceive('saveAndAttach');
-
-    $gateway = makeStripeGateway();
-    $gateway->setCustomerRepository($customers);
-
-    $request = $gateway->purchase([
-        'gateway' => stripeGatewayCredential(),
-        'instrument' => $pm,
-    ]);
-
-    expect($request->getCustomerReference())->toBe('cus_existing');
-});
-
-it('adopts the owning customer from Stripe when the local link is missing', function () {
-    $pm = stripeSavedPaymentMethod();
-
-    fakeStripeHttp(['id' => 'pm_123', 'object' => 'payment_method', 'customer' => 'cus_owner']);
-
-    $customers = Mockery::mock(CustomerRepository::class);
-    $customers->shouldReceive('findByInstrument')->andReturn(null);
-    $customers->shouldReceive('saveAndAttach')
-        ->once()
-        ->withArgs(fn ($gatewayId, $instrument, $reference) => $reference === 'cus_owner');
-
-    $resolver = Mockery::mock(GatewayInstrumentRepository::class);
-    $resolver->shouldReceive('find')->andReturn('pm_123');
-
-    $gateway = makeStripeGateway();
-    $gateway->setCustomerRepository($customers);
-
-    $request = $gateway->purchase([
-        'gateway' => stripeGatewayCredential(),
-        'instrument' => $pm,
-        'referenceResolver' => $resolver,
-    ]);
-
-    expect($request->getCustomerReference())->toBe('cus_owner');
-});
-
-it('treats an empty-string customer link as missing and repairs it from Stripe', function () {
-    $pm = stripeSavedPaymentMethod();
-
-    fakeStripeHttp(['id' => 'pm_123', 'object' => 'payment_method', 'customer' => 'cus_owner']);
-
-    $customers = Mockery::mock(CustomerRepository::class);
-    $customers->shouldReceive('findByInstrument')->andReturn('');
-    $customers->shouldReceive('saveAndAttach')->once();
-
-    $resolver = Mockery::mock(GatewayInstrumentRepository::class);
-    $resolver->shouldReceive('find')->andReturn('pm_123');
-
-    $gateway = makeStripeGateway();
-    $gateway->setCustomerRepository($customers);
-
-    $request = $gateway->purchase([
-        'gateway' => stripeGatewayCredential(),
-        'instrument' => $pm,
-        'referenceResolver' => $resolver,
-    ]);
-
-    expect($request->getCustomerReference())->toBe('cus_owner');
-});
-
-it('leaves the customer unset when Stripe reports the payment method has no owner', function () {
-    $pm = stripeSavedPaymentMethod();
-
-    fakeStripeHttp(['id' => 'pm_123', 'object' => 'payment_method', 'customer' => null]);
-
-    $customers = Mockery::mock(CustomerRepository::class);
-    $customers->shouldReceive('findByInstrument')->andReturn(null);
-    $customers->shouldNotReceive('saveAndAttach');
-
-    $resolver = Mockery::mock(GatewayInstrumentRepository::class);
-    $resolver->shouldReceive('find')->andReturn('pm_123');
-
-    $gateway = makeStripeGateway();
-    $gateway->setCustomerRepository($customers);
-
-    // No billing email on the parameters either, so no customer is created.
-    $request = $gateway->purchase([
-        'gateway' => stripeGatewayCredential(),
-        'instrument' => $pm,
-        'referenceResolver' => $resolver,
-    ]);
-
-    expect($request->getCustomerReference())->toBe('');
-});
-
 /**
- * Email is optional on a {@see BillingAddress}, and it used to decide whether the
- * instrument got a Stripe Customer at all. A PaymentMethod with no Customer is
- * single-use — the SetupIntent confirm spends it, and Stripe refuses every later
- * charge — so an address without an email registered a card nobody could use.
+ * The six tests that used to sit here pinned the search that stood in for knowing who was
+ * paying: keep an existing instrument-keyed link, adopt the owner from Stripe when the link was
+ * missing, repair an empty-string link, fall through when the lookup failed, and create a
+ * customer from a billing address. All of that machinery is gone — with a customer named,
+ * resolution is one lookup and at most one creation, covered at the bottom of this file. The
+ * behaviour was not moved; it was removed, deliberately and with the plan saying so.
  */
-it('creates a customer from a billing address that carries no email', function () {
-    fakeStripeHttp(['id' => 'cus_no_email', 'object' => 'customer']);
 
-    $customers = Mockery::mock(CustomerRepository::class);
-    $customers->shouldReceive('findByInstrument')->andReturn(null);
-    $customers->shouldReceive('saveAndAttach')->once();
-
-    $gateway = makeStripeGateway();
-    $gateway->setCustomerRepository($customers);
-
-    $request = $gateway->createPaymentMethod([
-        'gateway' => stripeGatewayCredential(),
-        'instrument' => stripeSavedPaymentMethod(),
-        'billingAddress' => new BillingAddress('Test', 'User', '1 St', 'NYC', new Country('US'), '10001'),
-    ]);
-
-    expect($request->getCustomerReference())->toBe('cus_no_email');
-});
-
-it('falls through gracefully when the Stripe lookup fails', function () {
-    $pm = stripeSavedPaymentMethod();
-
-    fakeStripeHttp(['error' => ['type' => 'invalid_request_error', 'message' => 'No such payment method']], 404);
-
-    $customers = Mockery::mock(CustomerRepository::class);
-    $customers->shouldReceive('findByInstrument')->andReturn(null);
-    $customers->shouldNotReceive('saveAndAttach');
-
-    $resolver = Mockery::mock(GatewayInstrumentRepository::class);
-    $resolver->shouldReceive('find')->andReturn('pm_gone');
-
-    $gateway = makeStripeGateway();
-    $gateway->setCustomerRepository($customers);
-
-    $request = $gateway->purchase([
-        'gateway' => stripeGatewayCredential(),
-        'instrument' => $pm,
-        'referenceResolver' => $resolver,
-    ]);
-
-    expect($request->getCustomerReference())->toBe('');
-});
-
-// ──────────────────────────────────────────────
-//  Refusals, and which of them may be folded into a decline
-// ──────────────────────────────────────────────
 
 it('refuses card issuing with the marker that stops it becoming a decline', function (string $method) {
     // PaymentGatewayRouter rethrows only UnsupportedByGateway and folds everything else into
@@ -606,4 +473,91 @@ it('describes the SDK shape without any address configured', function () {
         // Still not an authorization: the money is not held until the payer answers.
         ->and($response->isSuccessful())->toBeFalse()
         ->and($response->getMessage())->toBeNull();
+});
+
+// ──────────────────────────────────────────────
+//  told who is paying
+// ──────────────────────────────────────────────
+
+/**
+ * Given a customer, resolution is a lookup. What it replaced was a search that stood in for
+ * knowing: find by instrument, else ask Stripe who owns the instrument, else invent a customer
+ * from whatever address rode along with this payment — so the same person paying from two
+ * addresses became two Stripe customers. None of that survives, so there is nothing left to
+ * assert it does not run.
+ */
+it('looks the customer up instead of searching for one', function () {
+    $customerId = '0199f0a2-1c3a-7b8d-9e4f-aabbccddeeff';
+
+    $gatewayCustomers = Mockery::mock(GatewayCustomerRepository::class);
+    $gatewayCustomers->shouldReceive('find')->once()->andReturn('cus_known');
+    $gatewayCustomers->shouldNotReceive('saveReference');
+
+    $identities = Mockery::mock(CustomerIdentitySource::class);
+    $identities->shouldNotReceive('find');
+
+    $gateway = makeStripeGateway();
+    $gateway->setGatewayCustomerRepository($gatewayCustomers);
+    $gateway->setCustomerIdentitySource($identities);
+
+    $request = $gateway->authorize([
+        'gateway' => stripeGatewayCredential(),
+        'instrument' => stripeSavedPaymentMethod(),
+        'customerId' => $customerId,
+    ]);
+
+    expect($request->getCustomerReference())->toBe('cus_known');
+});
+
+/**
+ * A customer Stripe has not met yet is created from the identity the host holds, and the pairing
+ * is remembered so the next payment is a lookup.
+ */
+it('creates the Stripe customer from the identity we hold', function () {
+    $customerId = '0199f0a2-1c3a-7b8d-9e4f-aabbccddeeff';
+
+    fakeStripeHttp(['id' => 'cus_new', 'object' => 'customer']);
+
+    $gatewayCustomers = Mockery::mock(GatewayCustomerRepository::class);
+    $gatewayCustomers->shouldReceive('find')->once()->andReturnNull();
+    $gatewayCustomers->shouldReceive('saveReference')->once()->with(Mockery::any(), $customerId, 'cus_new');
+
+    $identities = Mockery::mock(CustomerIdentitySource::class);
+    $identities->shouldReceive('find')->once()->with($customerId)->andReturn(
+        new CustomerIdentity('Ada', 'Lovelace', new Email('ada@example.com')),
+    );
+
+    $gateway = makeStripeGateway();
+    $gateway->setGatewayCustomerRepository($gatewayCustomers);
+    $gateway->setCustomerIdentitySource($identities);
+
+    $request = $gateway->authorize([
+        'gateway' => stripeGatewayCredential(),
+        'instrument' => stripeSavedPaymentMethod(),
+        'customerId' => $customerId,
+    ]);
+
+    expect($request->getCustomerReference())->toBe('cus_new');
+});
+
+/**
+ * No identity source bound means nothing to build a customer from, and null is the honest
+ * answer. It surfaces as a refused registration rather than as a Stripe customer named after one
+ * payment's billing details.
+ */
+it('declines to invent a customer when it cannot be told who they are', function () {
+    $gatewayCustomers = Mockery::mock(GatewayCustomerRepository::class);
+    $gatewayCustomers->shouldReceive('find')->once()->andReturnNull();
+    $gatewayCustomers->shouldNotReceive('saveReference');
+
+    $gateway = makeStripeGateway();
+    $gateway->setGatewayCustomerRepository($gatewayCustomers);
+
+    $request = $gateway->authorize([
+        'gateway' => stripeGatewayCredential(),
+        'instrument' => stripeSavedPaymentMethod(),
+        'customerId' => '0199f0a2-1c3a-7b8d-9e4f-aabbccddeeff',
+    ]);
+
+    expect($request->getCustomerReference())->toBe('');
 });

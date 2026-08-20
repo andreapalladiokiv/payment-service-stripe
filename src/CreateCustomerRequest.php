@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Techork\PaymentService\Stripe;
 
 use Override;
+use Techork\PaymentService\Common\ValueObject\CustomerIdentity;
 use Techork\PaymentService\Stripe\Concern\StripeRequestParameters;
 use Omnipay\Common\Message\AbstractRequest;
 use Stripe\Exception\ApiErrorException;
@@ -22,11 +23,28 @@ final class CreateCustomerRequest extends AbstractRequest
     #[Override]
     public function getData(): array
     {
-        // Read off the billing address rather than five discrete keys. Those keys had no
-        // setters, so omnipay dropped every one of them and this request created customers
-        // carrying an email and nothing else — while the caller was already handing over a
-        // whole BillingAddress that had nowhere to land.
+        // A `CustomerIdentity` when the caller knows whose customer this is, and an address
+        // otherwise. The second is the older path and the weaker one: it names a Stripe Customer
+        // after whatever address rode along with one payment, so the same person paying from two
+        // addresses becomes two customers. It stays for callers that have not started naming the
+        // customer yet.
+        //
+        // Read off objects rather than five discrete keys, because those keys had no setters and
+        // omnipay dropped every one of them: this request used to create customers carrying an
+        // email and nothing else, while the caller was handing over a whole address that had
+        // nowhere to land.
+        $identity = $this->getCustomerIdentity();
         $address = $this->getBillingAddress();
+
+        if ($identity !== null) {
+            return array_filter([
+                'name' => trim($identity->firstName.' '.$identity->lastName),
+                'email' => $identity->email ? (string) $identity->email : null,
+                'phone' => $identity->phone ? (string) $identity->phone : null,
+                'address' => $this->formatCustomerAddress($address),
+            ]);
+        }
+
         $email = $this->getEmail() !== '' ? $this->getEmail() : (string) ($address?->email ?? '');
 
         return array_filter([
@@ -53,6 +71,18 @@ final class CreateCustomerRequest extends AbstractRequest
                 'error' => $e->getMessage(),
             ]);
         }
+    }
+
+    public function setCustomerIdentity(?CustomerIdentity $value): self
+    {
+        return $this->setParameter('customerIdentity', $value);
+    }
+
+    public function getCustomerIdentity(): ?CustomerIdentity
+    {
+        $identity = $this->getParameter('customerIdentity');
+
+        return $identity instanceof CustomerIdentity ? $identity : null;
     }
 
     public function getEmail(): string
