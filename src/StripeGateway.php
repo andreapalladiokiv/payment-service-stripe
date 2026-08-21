@@ -13,8 +13,8 @@ use Stripe\StripeClient;
 use Techork\PaymentService\Common\Contract\PaymentInstrument;
 use Techork\PaymentService\Common\ValueObject\BillingAddress;
 use Techork\PaymentService\Common\ValueObject\PaymentMethod;
-use Techork\PaymentService\Gateway\Contract\CustomerIdentitySource;
 use Techork\PaymentService\Gateway\Contract\GatewayCustomerRepository;
+use Techork\PaymentService\Gateway\Contract\RegistersCustomers;
 use Techork\PaymentService\Gateway\Contract\ResolvesGatewayCustomers;
 use Techork\PaymentService\Gateway\Exception\UnsupportedOperation;
 use Techork\PaymentService\Gateway\Contract\Gateway;
@@ -22,11 +22,9 @@ use Techork\PaymentService\Gateway\Contract\GatewayCredential;
 use Techork\PaymentService\Gateway\Contract\GatewayInstrumentRepository;
 use Techork\PaymentService\Gateway\ValueObject\GatewayId;
 
-final class StripeGateway extends AbstractGateway implements Gateway, ResolvesGatewayCustomers
+final class StripeGateway extends AbstractGateway implements Gateway, RegistersCustomers, ResolvesGatewayCustomers
 {
     private ?GatewayCustomerRepository $gatewayCustomerRepository = null;
-
-    private ?CustomerIdentitySource $customerIdentitySource = null;
 
     #[Override]
     public function getName(): string
@@ -38,12 +36,6 @@ final class StripeGateway extends AbstractGateway implements Gateway, ResolvesGa
     public function setGatewayCustomerRepository(GatewayCustomerRepository $repository): void
     {
         $this->gatewayCustomerRepository = $repository;
-    }
-
-    #[Override]
-    public function setCustomerIdentitySource(CustomerIdentitySource $source): void
-    {
-        $this->customerIdentitySource = $source;
     }
 
     #[Override]
@@ -62,6 +54,7 @@ final class StripeGateway extends AbstractGateway implements Gateway, ResolvesGa
         return $this->setParameter('apiKey', $value);
     }
 
+    #[Override]
     public function createCustomer(array $parameters = []): AbstractRequest
     {
         return $this->createRequest(CreateCustomerRequest::class, $parameters);
@@ -241,19 +234,18 @@ final class StripeGateway extends AbstractGateway implements Gateway, ResolvesGa
      * rejects the charge with "Please include the customer".
      */
     /**
-     * Which Stripe Customer one of ours is, creating it the first time.
+     * The reference this gateway knows one of our customers under, and nothing more.
      *
-     * This used to be a search standing in for knowing: find by instrument, else ask Stripe who
-     * owns the instrument, else invent a Customer from whatever address rode along with this
-     * payment — so the same person paying from two addresses became two Stripe customers, and a
-     * payment with no address got no Customer and therefore an unusable PaymentMethod.
+     * **Lookup only, and there is no creating variant.** Bringing a customer into existence at a
+     * provider is its own operation now — {@see \Techork\PaymentService\Gateway\Contract\PaymentGatewayInterface::registerCustomer()},
+     * driven by whoever holds the customer. It used to be a lookup-or-create hidden here, which
+     * meant saving a card could mint a provider-side customer as a side effect, and taking a
+     * payment could mint one that cannot possibly own the instrument being charged: an attached
+     * instrument belongs to the customer it was attached to, so a customer created now is a stray
+     * one and the charge fails anyway.
      *
-     * All of it is gone, and **not replaced by a fallback**. With no customer named there is no
-     * customer, and null surfaces as a refused registration
-     * ({@see CreatePaymentMethodRequest::sendData()} already refuses without one) rather than as
-     * a Stripe Customer named after one payment's billing details. A silent fallback to the old
-     * behaviour would have made this change optional, and it would have been taken by every
-     * caller that forgot to name the customer.
+     * A miss therefore means no customer on this request, which is the same shape as a caller
+     * naming none — and on registration it surfaces as a refusal rather than as an invented person.
      */
     private function resolveCustomerReference(
         ?GatewayCredential $gateway,
@@ -263,40 +255,6 @@ final class StripeGateway extends AbstractGateway implements Gateway, ResolvesGa
             return null;
         }
 
-        $gatewayId = $gateway->getId();
-
-        return $this->gatewayCustomerRepository->find($gatewayId, $customerId)
-            ?? $this->createCustomerFor($gatewayId, $customerId);
+        return $this->gatewayCustomerRepository->find($gateway->getId(), $customerId);
     }
-
-    /**
-     * Creates the Stripe Customer for one of ours and remembers which is which.
-     *
-     * Built from the identity the host holds rather than from whatever address rode along with
-     * this payment — that is the difference the customer aggregate buys. With no identity source
-     * bound there is nothing to build one from, and null is the honest answer: it surfaces as a
-     * refused registration rather than as a customer named after one payment's billing details.
-     */
-    private function createCustomerFor(GatewayId $gatewayId, string $customerId): ?string
-    {
-        $identity = $this->customerIdentitySource?->find($customerId);
-
-        if ($identity === null) {
-            return null;
-        }
-
-        $response = $this->createCustomer(['customerIdentity' => $identity])->send();
-
-        if (! $response->isSuccessful()) {
-            throw new RuntimeException("Stripe createCustomer failed: {$response->getMessage()}");
-        }
-
-        $reference = $response->getTransactionReference()
-            ?? throw new RuntimeException('Stripe createCustomer returned no reference.');
-
-        $this->gatewayCustomerRepository?->saveReference($gatewayId, $customerId, $reference);
-
-        return $reference;
-    }
-
 }

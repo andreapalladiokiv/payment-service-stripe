@@ -73,6 +73,16 @@ final class CreateCustomerRequest extends AbstractRequest
         }
     }
 
+    /**
+     * Ours is not sent, and there is nothing to translate.
+     *
+     * Stripe assigns the id — the `cus_…` comes back on the response and is what
+     * `GatewayCustomerRepository` stores against our customer. That is the opposite of Nuvei, where
+     * the id is ours to choose and `userTokenId` has to carry it, so
+     * {@see \Techork\PaymentService\Nuvei\CreateCustomerRequest::setCustomerId()} exists there
+     * and here it deliberately does not: a setter that accepted and ignored our id would read as
+     * if Stripe were being told something it never receives.
+     */
     public function setCustomerIdentity(?CustomerIdentity $value): self
     {
         return $this->setParameter('customerIdentity', $value);
