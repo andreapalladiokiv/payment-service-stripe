@@ -2,8 +2,10 @@
 
 `techork/payment-service-stripe` — Stripe implementation of the
 `Techork\PaymentService\Gateway\Contract\Gateway` port, built on
-[`stripe/stripe-php`](https://github.com/stripe/stripe-php) and Omnipay's
-request/response plumbing. Charges run through the
+[`stripe/stripe-php`](https://github.com/stripe/stripe-php). Each provider
+operation is one class named for the operation, with a pure `payload()` that
+builds the request body and one method that makes the call and returns a typed
+result — there is no request/response lifecycle. Charges run through the
 [PaymentIntents API](https://docs.stripe.com/api/payment_intents); every
 amount is passed as `Money` minor units, verbatim.
 
@@ -14,71 +16,98 @@ bridge: `gateway` → `StripeGateway`, `webhook` → `Webhook\StripeWebhookSubsc
 
 | Key | Used by | Meaning |
 | --- | --- | --- |
-| `apiKey` | `StripeGateway::initialize()` / every request | Stripe secret key for all SDK calls |
+| `apiKey` | `StripeGateway::configure()`, then `StripeSettings` on every operation | Stripe secret key for all SDK calls |
 | `api_key` | `ChargeUpdatedHandler`, `ChargeRefundUpdatedHandler` (via `GatewayCredential::getCredentials()`) | Same secret key, read from the stored credential when a webhook must refetch a BalanceTransaction |
 | `webhook_signing_key` | `Webhook\SignatureVerifier` | Stripe webhook signing secret (`whsec_…`) |
 
-`setClientUniqueId()` is forwarded as the Stripe
+The command's `clientUniqueId` is forwarded as the Stripe
 [`idempotency_key`](https://docs.stripe.com/api/idempotent_requests) (see
 `StripeRequestParameters::stripeOpts()`); no key is sent when it is unset.
 `createCustomer` / `updateCustomer` pass no opts and never send one.
 
 ## Operations
 
-| Operation | Stripe call | Notes |
-| --- | --- | --- |
-| `purchase` | `paymentIntents.create` (`confirm: true`) | `HostedPayment` instrument switches to a Checkout Session instead |
-| `authorize` | `paymentIntents.create` (`capture_method: manual`) | |
-| `capture` | `paymentIntents.capture` | optional `money` → partial `amount_to_capture` |
-| `refund` | `refunds.create` | by `payment_intent` reference |
-| `void` | `paymentIntents.cancel` | `VoidResponse` succeeds only when status is `canceled` |
-| `createCard` | `tokens.create` | raw card → single-use `tok_…` |
-| `createPaymentMethod` | `paymentMethods.create` (+ `attach`, + confirmed SetupIntent) | reusable `pm_…`; the SetupIntent runs AVS/CVC checks and saves the PM for off-session reuse; the PM is re-retrieved to read the checks |
-| `createCustomer` / `updateCustomer` | `customers.create` / `customers.update` | `cus_…` as transaction reference |
-| `retryRefund`, `issueVirtualCard`, `updateVirtualCard`, `terminateVirtualCard` | — | throw `RuntimeException` (Stripe can only refund to the original source; no card issuing here) |
+Each row is one class. The gateway's role method performs it; the accessor
+beside it builds the operation without performing it, so a test can read
+`payload()` without an API key.
+
+| Role | Accessor | Operation class | Stripe call | Notes |
+| --- | --- | --- | --- | --- |
+| `charge` | `charging()` | `Charge` | `paymentIntents.create` (`confirm: true`) | `HostedPayment` instrument switches to a Checkout Session instead |
+| `authorize` | `authorizing()` | `Authorize` | `paymentIntents.create` (`capture_method: manual`) | |
+| `authorizeRebilling` | `authorizingRebilling()` | `Authorize` | as above | the series position reaches Stripe as `off_session` plus the attached customer, so `RebillingCommand::toPlacement()` drops the genesis reference Stripe has no field for |
+| `capture` | `capturing()` | `Capture` | `paymentIntents.capture` | the command's amount → `amount_to_capture` |
+| `refund` | `refunding()` | `Refund` | `refunds.create` | by `payment_intent` reference |
+| `cancel` | `cancelling()` | `Cancel` | `paymentIntents.cancel` | succeeds only when the answer's status is `canceled` — Stripe returns 200 for a cancel it did not perform |
+| `tokenize` | `tokenizing()` | `Tokenize` | `tokens.create` | raw card → single-use `tok_…` |
+| `registerPaymentMethod` | `registering()` | `RegisterPaymentMethod` | `paymentMethods.create` (+ `attach`, + confirmed SetupIntent) | reusable `pm_…`; the SetupIntent runs AVS/CVC checks and saves the PM for off-session reuse; the PM is re-retrieved to read the checks. Refused outright when no customer resolved: an unattached PM is single-use |
+| — | `createCustomer()` / `updateCustomer()` | `CreateCustomer` / `UpdateCustomer` | `customers.create` / `customers.update` | not a role; `cus_…` as the reference. Called by `resolveCustomerReference()` below |
+| `retryRefund` | — | — | — | throws `RuntimeException`, deliberately unmarked so a refund can still fail gracefully (Stripe can only refund to the original source) |
+| `issueVirtualCard`, `updateVirtualCard`, `terminateVirtualCard` | — | — | — | throw `UnsupportedOperation` (Stripe Issuing is a separate product; reaching these is a misroute) |
 
 ### Instruments
 
-`PurchaseRequest`, `AuthorizeRequest`, `CreateCardRequest` and
-`CreatePaymentMethodRequest` implement `PaymentInstrumentVisitor`:
+`Charge`, `Authorize`, `Tokenize` and `RegisterPaymentMethod` implement
+`PaymentInstrumentVisitor`:
 
-- `CreditCard` — PAN/CVC decrypted via the configured `decrypter` and sent as `payment_method_data` (`createCard` sends a bare `card` payload to `tokens.create`).
+- `CreditCard` — PAN/CVC decrypted via the configured `decrypter` and sent as `payment_method_data` (`Tokenize` sends a bare `card` payload to `tokens.create`).
 - `Token` — resolved to a `tok_…` through the `referenceResolver` (`GatewayInstrumentRepository`); missing reference throws.
-- `PaymentMethod` — resolved to a `pm_…`; charged with `off_session: true` (MIT).
-- `HostedPayment` — `purchase` only: creates a `mode: payment` Checkout Session and returns a `RedirectChallenge`; the underlying PaymentIntent id is used as the gateway reference so the `payment_intent.succeeded` webhook resolves it.
+- `PaymentMethod` — resolved to a `pm_…`. `off_session` is set from the command's `initiation`, NOT from the instrument being stored: a saved card in a live checkout is cardholder-initiated.
+- `HostedPayment` — `charge` only: creates a `mode: payment` Checkout Session and returns a `RedirectChallenge`; the underlying PaymentIntent id is used as the gateway reference so the `payment_intent.succeeded` webhook resolves it.
 - `Cash` — unsupported, throws.
 
 ### Customer resolution
 
-`StripeGateway::purchase()/authorize()/createPaymentMethod()` resolve a
-`customerReference` before building the request (`resolveCustomerReference()`):
+`StripeGateway` resolves a `customerReference` before building any placement or
+vaulting operation and hands it to the constructor (`resolveCustomerReference()`):
 look up the instrument's customer in the injected `CustomerRepository`
 (empty string counts as missing — legacy rows), otherwise adopt the owning
 customer straight from Stripe when the `pm_…` is already attached there
 (`adoptCustomerFromStripe()` repairs the local link), otherwise create a new
-Stripe customer — but only when a `billingAddress` with an email is available.
+Stripe customer from the `billingAddress`. An email is NOT required for that
+last step: a PaymentMethod with no Customer is single-use, so gating on an
+optional field registered cards nobody could charge.
 
 ### 3-D Secure
 
-A `ThreeDSResult` passed via `setThreeDS()` is forwarded as
+The command's `threeDS` is forwarded as
 `payment_method_options.card.three_d_secure` (cryptogram, DS transaction id,
-version, `ares_trans_status`, ECI) on purchase, authorize and the
-`createPaymentMethod` SetupIntent. When Stripe answers `requires_action`, the
-response carries a `ThreeDSChallenge` (PI id, redirect URL, `client_secret`).
-PaymentIntents are created with
-`automatic_payment_methods: {enabled: true, allow_redirects: 'never'}`.
+version, `ares_trans_status`, ECI) on `charge` and `authorize`. Absent members
+are omitted rather than sent as null, and an attestation with no cryptogram is
+refused with `IncompleteAuthentication` rather than shipped — see
+`Concern\FormatsThreeDS`. A `VaultCommand` carries no attestation, so the
+SetupIntent sends no such block.
 
-### Responses
+When Stripe answers `requires_action`, `StripeChallenge` reads which of its two
+shapes came back: `redirect_to_url` becomes a `ThreeDSChallenge`, and
+`use_stripe_sdk` an `SdkChallenge` — or a `ThreeDSChallenge` on the configured
+`authenticationUrl` when the deployment would rather have an address.
+PaymentIntents are created with `allow_redirects: 'never'` unless a `returnUrl`
+is configured, in which case Stripe may answer with an address of its own.
 
-All responses extend `StripeResponse` (success ⇔ a `reference` is present),
-which implements the Gateway provider contracts:
+### Results
 
-- `CardChecksProvider` — AVS line / postal-code / CVC results, extracted from the expanded `payment_method.card.checks` and normalized to the `CheckResult` enum (`ExtractsCardChecks`); unknown Stripe values become `null`.
-- `ConvertedAmountProvider` — FX-settled amount from the expanded `latest_charge.balance_transaction`, only when the charge's currency differs from the balance transaction's settlement currency — Stripe's `exchange_rate` is deliberately not consulted (`ExtractsConvertedAmount`); populated on purchase and capture.
-- `ChallengeProvider` — `ThreeDSChallenge` / `RedirectChallenge`, see above.
+Operations return the Gateway's own result types directly — `GatewayResult` for
+capture / refund / cancel, `AuthorizationResult` for charge / authorize,
+`RegistrationResult` for tokenize / registerPaymentMethod. There is no response
+class and no shared assembler in between.
 
-`ApiErrorException` is never thrown to the caller: requests catch it and
-return a failed response whose `getMessage()` is the Stripe error message.
+`PaymentIntentOutcome` is the one mapping from a `PaymentIntent` to an
+`AuthorizationResult`, and it decides success from the STATUS the operation
+named — `requires_capture` for an authorize, `succeeded` for a charge. An id is
+present in every state, `requires_action` included, so reading success off the
+id reported a card still owing 3DS as an authorization. It also attaches:
+
+- AVS line / postal-code / CVC results, extracted from the expanded `payment_method.card.checks` and normalized to the `CheckResult` enum (`ExtractsCardChecks`); unknown Stripe values become `null`.
+- the FX-settled amount from the expanded `latest_charge.balance_transaction`, only when the charge's currency differs from the balance transaction's settlement currency — Stripe's `exchange_rate` is deliberately not consulted (`ExtractsConvertedAmount`); populated on charge and capture.
+- `opening_transaction_reference` metadata — which transaction OPENED the intent, because `reference` is overwritten on transition and cannot answer that once a capture lands. Only the opening operations map through here, so a settle cannot bury the anchor.
+
+`ApiErrorException` is never thrown to the caller: operations catch it and
+return a failed result whose `message` is the Stripe error message. Structural
+refusals (`UnsupportedInstrument`, `UnsupportedOperation`,
+`IncompleteAuthentication`) are NOT caught — they carry the
+`UnsupportedByGateway` marker so the router rethrows rather than recording an
+acquirer decline for a request no acquirer saw.
 
 ## Webhooks
 
@@ -103,5 +132,8 @@ the idempotency key. Handlers return `Processed` / `Skipped` / `Delay`
 ## Testing
 
 Pest unit tests only — the `StripeClient` is never hit, so no credentials are
-needed. `ThreeDSIntegrationTest` and `StripeRequestParametersTest` show
-realistic request wiring (3DS pass-through, idempotency opts).
+needed; where an operation is exercised end-to-end, a stub is installed through
+`ApiRequestor::setHttpClient()` and restored in `afterEach`.
+`ThreeDSIntegrationTest` and `StripeOffSessionTest` assert on what the SDK
+actually puts on the wire, which is the only way to tell a parameter that was
+built from one that was dropped on the way.

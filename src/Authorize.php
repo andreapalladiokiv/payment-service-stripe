@@ -4,16 +4,11 @@ declare(strict_types=1);
 
 namespace Techork\PaymentService\Stripe;
 
-use Override;
-use Techork\PaymentService\Gateway\Concern\InstrumentParameters;
-use Techork\PaymentService\Stripe\Concern\ExtractsCardChecks;
-use Techork\PaymentService\Stripe\Concern\FormatsThreeDS;
-use Techork\PaymentService\Stripe\Concern\ReadsPaymentIntentOutcome;
-use Techork\PaymentService\Stripe\Concern\StripeRequestParameters;
-use Techork\PaymentService\Gateway\Contract\GatewayCredential;
 use Money\Money;
-use Omnipay\Common\Message\AbstractRequest;
+use Override;
 use RuntimeException;
+use Stripe\Exception\ApiErrorException;
+use Stripe\StripeClient;
 use Techork\PaymentService\Common\Contract\PaymentInstrument;
 use Techork\PaymentService\Common\Contract\PaymentInstrumentVisitor;
 use Techork\PaymentService\Common\ValueObject\Cash;
@@ -21,57 +16,80 @@ use Techork\PaymentService\Common\ValueObject\CreditCard;
 use Techork\PaymentService\Common\ValueObject\HostedPayment;
 use Techork\PaymentService\Common\ValueObject\PaymentMethod;
 use Techork\PaymentService\Common\ValueObject\Token;
+use Techork\PaymentService\Gateway\Command\PlacementCommand;
+use Techork\PaymentService\Gateway\Contract\AuthorizationResult;
+use Techork\PaymentService\Gateway\Contract\GatewayCredential;
 use Techork\PaymentService\Gateway\Exception\UnsupportedInstrument;
-use Stripe\Exception\ApiErrorException;
-use Stripe\StripeClient;
+use Techork\PaymentService\Gateway\ValueObject\GatewayInfrastructure;
+use Techork\PaymentService\Stripe\Concern\FormatsThreeDS;
+use Techork\PaymentService\Stripe\Concern\StripeRequestParameters;
 
 /**
+ * Reserves funds on a card through a Stripe PaymentIntent created with `capture_method: manual`.
+ *
+ * Two parts, and only the second one touches the network: {@see payload()} turns the command's
+ * instrument into the body, {@see authorize()} sends it and hands the answer to
+ * {@see PaymentIntentOutcome}, which knows that an authorization is finished at
+ * `requires_capture` and nowhere else. There is no request object with a `getData()`/`sendData()`
+ * lifecycle and no response object wrapping a payload array for a shared assembler to re-read —
+ * Omnipay needed both because a request was a parameter bag and a response had to be interrogated
+ * through a common interface. Neither is true here.
+ *
+ * The same provider call serves {@see StripeGateway::authorizeRebilling()}: Stripe expresses a
+ * series position through `off_session` and the customer the payment method is attached to, so
+ * there is no anchor field for a genesis reference to land in and the rebilling command arrives
+ * here as an ordinary placement. See {@see \Techork\PaymentService\Gateway\Command\RebillingCommand::toPlacement()}.
+ *
  * @implements PaymentInstrumentVisitor<array>
  */
-final class AuthorizeRequest extends AbstractRequest implements PaymentInstrumentVisitor
+final class Authorize implements PaymentInstrumentVisitor
 {
-    use ExtractsCardChecks;
     use FormatsThreeDS;
-    use ReadsPaymentIntentOutcome;
-    use InstrumentParameters;
     use StripeRequestParameters;
 
-    #[Override]
-    public function getData(): array
-    {
-        $this->validate('money', 'instrument', 'gateway');
+    public function __construct(
+        private readonly GatewayInfrastructure $infrastructure,
+        private readonly StripeSettings $settings,
+        private readonly PlacementCommand $command,
+        private readonly ?string $customerReference = null,
+    ) {}
 
+    /**
+     * @return array<string, mixed>
+     */
+    public function payload(): array
+    {
         /** @var Money $money */
-        $money = $this->getParameter('money');
+        $money = $this->command->amount;
 
         /** @var PaymentInstrument $instrument */
-        $instrument = $this->getParameter('instrument');
+        $instrument = $this->command->instrument;
         $data = $instrument->accept($this);
 
         $data['amount'] = (int) $money->getAmount();
         $data['currency'] = strtolower($money->getCurrency()->getCode());
 
-        if ($this->getCustomerReference() !== '') {
-            $data['customer'] = $this->getCustomerReference();
+        if (($this->customerReference ?? '') !== '') {
+            $data['customer'] = ($this->customerReference ?? '');
         }
 
         // `statement_descriptor_suffix`, not `statement_descriptor`: Stripe refuses the
         // latter on a PaymentIntent whose payment_method_type is `card`, which is every
-        // PaymentIntent this request builds. The account's own prefix supplies the rest
+        // PaymentIntent this operation builds. The account's own prefix supplies the rest
         // of the descriptor, and the two together are capped at 22 characters — a longer
         // suffix is rejected rather than truncated here, because shortening what appears
         // on a cardholder's statement is the caller's decision, not ours.
-        $statementDescription = $this->getStatementDescription();
+        $statementDescription = $this->command->statementDescription;
         if ($statementDescription !== null && $statementDescription !== '') {
             $data['statement_descriptor_suffix'] = $statementDescription;
         }
 
-        $description = $this->getDescription();
+        $description = $this->command->description;
         if ($description !== null && $description !== '') {
             $data['description'] = $description;
         }
 
-        $billingAddress = $this->getParameter('billingAddress');
+        $billingAddress = $this->command->billingAddress;
         $billingDetails = $this->formatBillingDetails($billingAddress);
         if ($billingDetails !== null && isset($data['payment_method_data'])) {
             $data['payment_method_data']['billing_details'] = $billingDetails;
@@ -80,20 +98,10 @@ final class AuthorizeRequest extends AbstractRequest implements PaymentInstrumen
         return $data;
     }
 
-    public function getCustomerReference(): string
-    {
-        return $this->getParameter('customerReference') ?? '';
-    }
-
-    public function setCustomerReference(string $value): self
-    {
-        return $this->setParameter('customerReference', $value);
-    }
-
     #[Override]
     public function visitCreditCard(CreditCard $card): array
     {
-        $decrypter = $this->getDecrypter();
+        $decrypter = $this->infrastructure->decrypter;
 
         return [
             'payment_method_data' => [
@@ -118,8 +126,8 @@ final class AuthorizeRequest extends AbstractRequest implements PaymentInstrumen
     public function visitToken(Token $token): array
     {
         /** @var GatewayCredential $gateway */
-        $gateway = $this->getParameter('gateway');
-        $reference = $this->getReferenceResolver()->find($gateway->getId(), $token)
+        $gateway = $this->infrastructure->credential;
+        $reference = $this->infrastructure->instruments->find($gateway->getId(), $token)
             ?? throw new RuntimeException("No Stripe reference found for token {$token->id}.");
 
         return [
@@ -131,8 +139,8 @@ final class AuthorizeRequest extends AbstractRequest implements PaymentInstrumen
     public function visitPaymentMethod(PaymentMethod $paymentMethod): array
     {
         /** @var GatewayCredential $gateway */
-        $gateway = $this->getParameter('gateway');
-        $reference = $this->getReferenceResolver()->find($gateway->getId(), $paymentMethod)
+        $gateway = $this->infrastructure->credential;
+        $reference = $this->infrastructure->instruments->find($gateway->getId(), $paymentMethod)
             ?? throw new RuntimeException("No Stripe reference found for payment method $paymentMethod->id.");
 
         return [
@@ -141,10 +149,17 @@ final class AuthorizeRequest extends AbstractRequest implements PaymentInstrumen
     }
 
     #[Override]
-    public function sendData($data): AuthorizeResponse
+    public function visitHostedPayment(HostedPayment $hosted): never
     {
+        throw UnsupportedInstrument::forGateway('stripe', 'authorize', $hosted);
+    }
+
+    public function authorize(): AuthorizationResult
+    {
+        $data = $this->payload();
+
         try {
-            $stripe = new StripeClient($this->getApiKey());
+            $stripe = new StripeClient($this->settings->apiKey);
             $params = [
                 'amount' => $data['amount'],
                 'currency' => $data['currency'],
@@ -154,7 +169,7 @@ final class AuthorizeRequest extends AbstractRequest implements PaymentInstrumen
                 // leaves Stripe with only `use_stripe_sdk` to offer a card owing 3DS, which
                 // is fine — that shape is presentable too, on the page the credential names
                 // in `authenticationUrl`. Configure neither and there is nothing to show.
-                'automatic_payment_methods' => ['enabled' => true, 'allow_redirects' => $this->normalizedReturnUrl() === null ? 'never' : 'always'],
+                'automatic_payment_methods' => ['enabled' => true, 'allow_redirects' => $this->settings->normalizedReturnUrl() === null ? 'never' : 'always'],
                 'expand' => ['payment_method'],
             ];
 
@@ -185,44 +200,30 @@ final class AuthorizeRequest extends AbstractRequest implements PaymentInstrumen
             // exemption claimed where none applies, and a chargeback right the merchant thought
             // it had.
             //
-            // `initiation` is the fact, it reaches every request, and it was already here.
-            if ($this->getInitiation()->isMerchantInitiated()) {
+            // `initiation` is the fact, it reaches every operation, and it was already here.
+            if ($this->command->initiation->isMerchantInitiated()) {
                 $params['off_session'] = true;
             }
 
-            $paymentMethodOptions = $this->formatThreeDS();
+            $paymentMethodOptions = $this->formatThreeDS($this->command->threeDS);
             if ($paymentMethodOptions !== null) {
                 $params['payment_method_options'] = $paymentMethodOptions;
             }
 
-            $returnUrl = $this->normalizedReturnUrl();
+            $returnUrl = $this->settings->normalizedReturnUrl();
             if ($returnUrl !== null) {
                 $params['return_url'] = $returnUrl;
             }
 
-            $paymentIntent = $stripe->paymentIntents->create($params, $this->stripeOpts());
+            $paymentIntent = $stripe->paymentIntents->create($params, $this->stripeOpts($this->command->clientUniqueId));
 
-            $challenge = StripeChallenge::from($paymentIntent, $this->normalizedAuthenticationUrl());
-
-            return new AuthorizeResponse($this, [
-                'reference' => $paymentIntent->id,
-                'status' => $paymentIntent->status,
-                'challenge' => $challenge,
-                'error' => $this->explainUnusableOutcome($paymentIntent, $challenge, 'requires_capture'),
-                ...$this->extractStripeChecks($paymentIntent->payment_method instanceof \Stripe\PaymentMethod ? $paymentIntent->payment_method : null),
-            ]);
+            return new PaymentIntentOutcome()->map(
+                $paymentIntent,
+                StripeChallenge::from($paymentIntent, $this->settings->normalizedAuthenticationUrl()),
+                'requires_capture',
+            );
         } catch (ApiErrorException $e) {
-            return new AuthorizeResponse($this, [
-                'reference' => null,
-                'challenge' => null,
-                'error' => $e->getMessage(),
-            ]);
+            return AuthorizationResult::failed($e->getMessage());
         }
-    }
-
-    #[Override]
-    public function visitHostedPayment(HostedPayment $hosted): never
-    {
-        throw UnsupportedInstrument::forGateway('stripe', 'authorize', $hosted);
     }
 }

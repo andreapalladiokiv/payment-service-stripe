@@ -4,17 +4,16 @@ declare(strict_types=1);
 
 use Money\Currency;
 use Money\Money;
-use Omnipay\Common\Exception\InvalidRequestException;
-use Omnipay\Common\Http\PsrClient as OmnipayClient;
 use Stripe\ApiRequestor;
 use Stripe\HttpClient\ClientInterface;
 use Stripe\HttpClient\CurlClient;
-use Symfony\Component\HttpFoundation\Request as HttpRequest;
-use Techork\PaymentService\Stripe\RefundRequest;
-use Techork\PaymentService\Stripe\RefundResponse;
+use Techork\PaymentService\Gateway\Command\RefundCommand;
+use Techork\PaymentService\Gateway\ValueObject\GatewayId;
+use Techork\PaymentService\Stripe\Refund;
+use Techork\PaymentService\Stripe\StripeSettings;
 
 /**
- * {@see RefundRequest} was entirely unexecuted.
+ * {@see Refund} was entirely unexecuted.
  *
  * A refund is the one operation where a silently wrong amount cannot be
  * recovered from — the money has left. So the pins here are about the exact
@@ -22,10 +21,10 @@ use Techork\PaymentService\Stripe\RefundResponse;
  * both inputs must be mandatory rather than defaulted, and the refund must be
  * addressed by PaymentIntent rather than by charge.
  *
- * `sendData()` is exercised offline. Stripe's SDK resolves its HTTP client
+ * `refund()` is exercised offline. Stripe's SDK resolves its HTTP client
  * through the static `ApiRequestor::setHttpClient()`, so a stub there answers
- * the `StripeClient` built inside `sendData()`; the `afterEach` restores the
- * real curl client.
+ * the `StripeClient` built inside it; the `afterEach` restores the real curl
+ * client.
  */
 function stripeRefundFakeApi(array $body, int $status = 200): object
 {
@@ -49,16 +48,17 @@ function stripeRefundFakeApi(array $body, int $status = 200): object
     return $client;
 }
 
-function stripeRefundRequest(array $parameters = []): RefundRequest
+function stripeRefund(array $parameters = []): Refund
 {
-    $request = new RefundRequest(new OmnipayClient, new HttpRequest);
-    $request->initialize($parameters + [
-        'apiKey' => 'sk_test_fake',
-        'transactionReference' => 'pi_refunded',
-        'money' => new Money(2500, new Currency('USD')),
-    ]);
-
-    return $request;
+    return new Refund(
+        new StripeSettings($parameters['apiKey'] ?? 'sk_test_fake'),
+        new RefundCommand(
+            gatewayId: GatewayId::generate(),
+            transactionReference: $parameters['transactionReference'] ?? 'pi_refunded',
+            amount: $parameters['money'] ?? new Money(2500, new Currency('USD')),
+            clientUniqueId: $parameters['clientUniqueId'] ?? null,
+        ),
+    );
 }
 
 afterEach(function () {
@@ -66,25 +66,15 @@ afterEach(function () {
 });
 
 // ──────────────────────────────────────────────
-//  getData()
+//  payload()
 // ──────────────────────────────────────────────
 
-/**
- * Both inputs are mandatory, and separately so. Stripe would happily accept a
- * refund with no amount — it refunds the full charge — so a missing `money`
- * that fell through to a default would return the entire payment instead of
- * the part that was asked for.
+/*
+ * `it('requires both the amount and the payment reference')` lived here, with a row for each way
+ * to omit one. Both are constructor arguments on {@see RefundCommand}, so none of its three rows
+ * describes an operation that can be built. The concern behind it — that a missing amount would
+ * refund the whole charge rather than the part asked for — is now answered by the type.
  */
-it('requires both the amount and the payment reference', function (array $parameters) {
-    $request = new RefundRequest(new OmnipayClient, new HttpRequest);
-    $request->initialize($parameters + ['apiKey' => 'sk_test_fake']);
-
-    $request->getData();
-})->throws(InvalidRequestException::class)->with([
-    'no amount' => [['transactionReference' => 'pi_1']],
-    'no reference' => [fn () => ['money' => new Money(100, new Currency('USD'))]],
-    'neither' => [[]],
-]);
 
 /**
  * The minor unit passes through untouched — no rounding, no currency
@@ -94,14 +84,14 @@ it('requires both the amount and the payment reference', function (array $parame
  * operation.
  */
 it('builds refund data as the raw minor unit against the payment intent', function () {
-    expect(stripeRefundRequest()->getData())->toBe([
+    expect(stripeRefund()->payload())->toBe([
         'amount' => 2500,
         'payment_intent' => 'pi_refunded',
     ]);
 });
 
 // ──────────────────────────────────────────────
-//  sendData()
+//  refund()
 // ──────────────────────────────────────────────
 
 /**
@@ -112,7 +102,7 @@ it('builds refund data as the raw minor unit against the payment intent', functi
 it('creates the refund against the payment intent', function () {
     $api = stripeRefundFakeApi(['id' => 're_1', 'object' => 'refund']);
 
-    stripeRefundRequest()->send();
+    stripeRefund()->refund();
 
     expect($api->calls)->toHaveCount(1)
         ->and($api->calls[0]['url'])->toBe('https://api.stripe.com/v1/refunds')
@@ -130,7 +120,7 @@ it('creates the refund against the payment intent', function () {
 it('sends the caller idempotency key so a retried refund cannot pay out twice', function () {
     $api = stripeRefundFakeApi(['id' => 're_1', 'object' => 'refund']);
 
-    stripeRefundRequest(['clientUniqueId' => 'refund-uuid-9'])->send();
+    stripeRefund(['clientUniqueId' => 'refund-uuid-9'])->refund();
 
     expect($api->calls[0]['headers'])->toContain('Idempotency-Key: refund-uuid-9');
 });
@@ -143,40 +133,39 @@ it('sends the caller idempotency key so a retried refund cannot pay out twice', 
 it('reports the refund id rather than the payment intent as the reference', function () {
     stripeRefundFakeApi(['id' => 're_created', 'object' => 'refund']);
 
-    $response = stripeRefundRequest()->send();
+    $result = stripeRefund()->refund();
 
-    expect($response)->toBeInstanceOf(RefundResponse::class)
-        ->and($response->isSuccessful())->toBeTrue()
-        ->and($response->getTransactionReference())->toBe('re_created')
-        ->and($response->getMessage())->toBeNull();
+    expect($result->success)->toBeTrue()
+        ->and($result->reference)->toBe('re_created')
+        ->and($result->message)->toBeNull();
 });
 
 /**
  * A declined refund — insufficient platform balance, a charge already fully
- * refunded — is an outcome the router records, so it must arrive as a failed
- * response rather than as a thrown `ApiErrorException`.
+ * refunded — is an outcome the caller records, so it must arrive as a failed
+ * result rather than as a thrown `ApiErrorException`.
  */
-it('converts a Stripe API error into a failed response carrying the reason', function () {
+it('converts a Stripe API error into a failed result carrying the reason', function () {
     stripeRefundFakeApi(
         ['error' => ['type' => 'invalid_request_error', 'message' => 'Charge has already been refunded.']],
         400,
     );
 
-    $response = stripeRefundRequest()->send();
+    $result = stripeRefund()->refund();
 
-    expect($response->isSuccessful())->toBeFalse()
-        ->and($response->getTransactionReference())->toBeNull()
-        ->and($response->getMessage())->toBe('Charge has already been refunded.');
+    expect($result->success)->toBeFalse()
+        ->and($result->reference)->toBeNull()
+        ->and($result->message)->toBe('Charge has already been refunded.');
 });
 
 /**
  * A refund never converts currency, so it must never claim to have. Pinned
- * because `RefundResponse` inherits `getConvertedAmount()` from the shared
- * {@see \Techork\PaymentService\Stripe\StripeResponse}, where the key simply
- * being absent is what makes the answer null.
+ * because {@see \Techork\PaymentService\Gateway\Contract\GatewayResult} carries
+ * a `convertedAmount` slot for every operation, and this one is what leaves it
+ * alone.
  */
 it('never reports a converted amount', function () {
     stripeRefundFakeApi(['id' => 're_1', 'object' => 'refund']);
 
-    expect(stripeRefundRequest()->send()->getConvertedAmount())->toBeNull();
+    expect(stripeRefund()->refund()->convertedAmount)->toBeNull();
 });

@@ -2,18 +2,35 @@
 
 declare(strict_types=1);
 
+use Money\Currency;
 use Money\Money;
-use Omnipay\Common\Http\PsrClient as OmnipayClient;
 use Stripe\ApiRequestor;
 use Stripe\HttpClient\ClientInterface;
 use Stripe\HttpClient\CurlClient;
-use Symfony\Component\HttpFoundation\Request as HttpRequest;
+use Techork\PaymentService\Common\Contract\DecryptInterface;
+use Techork\PaymentService\Common\ValueObject\BillingAddress;
+use Techork\PaymentService\Common\ValueObject\CardBrand;
+use Techork\PaymentService\Common\ValueObject\Country;
+use Techork\PaymentService\Common\ValueObject\CreditCard;
+use Techork\PaymentService\Common\ValueObject\CreditCard\Cvc;
+use Techork\PaymentService\Common\ValueObject\CreditCard\Expiration;
+use Techork\PaymentService\Common\ValueObject\CreditCard\Holder;
+use Techork\PaymentService\Common\ValueObject\CreditCard\Number;
 use Techork\PaymentService\Common\ValueObject\PaymentInitiation;
-use Techork\PaymentService\Stripe\AuthorizeRequest;
-use Techork\PaymentService\Stripe\PurchaseRequest;
+use Techork\PaymentService\Common\ValueObject\PaymentMethod;
+use Techork\PaymentService\Common\ValueObject\PaymentMethodId;
+use Techork\PaymentService\Gateway\Command\PlacementCommand;
+use Techork\PaymentService\Gateway\Contract\CustomerRepository;
+use Techork\PaymentService\Gateway\Contract\GatewayCredential;
+use Techork\PaymentService\Gateway\Contract\GatewayInstrumentRepository;
+use Techork\PaymentService\Gateway\ValueObject\GatewayId;
+use Techork\PaymentService\Gateway\ValueObject\GatewayInfrastructure;
+use Techork\PaymentService\Stripe\Authorize;
+use Techork\PaymentService\Stripe\Charge;
+use Techork\PaymentService\Stripe\StripeSettings;
 
 /**
- * What `off_session` is set from, on both request classes that send it.
+ * What `off_session` is set from, on both operations that send it.
  *
  * It used to be set from whether the instrument was a stored reference rather than a raw card:
  * anything paid on a saved payment method went out `off_session => true`. That is a different
@@ -26,12 +43,13 @@ use Techork\PaymentService\Stripe\PurchaseRequest;
  * Off-session is what carries an authentication exemption and shifts who owns a dispute; claiming
  * it for an attended payment claims both wrongly.
  *
- * `initiation` is the fact and it already reaches every request — it is what the router sets on
- * the rebilling path and what the domain derives from the stored-credential position.
+ * `initiation` is the fact, and it is a field of {@see PlacementCommand}, so it reaches every
+ * operation — it is what the rebilling path sets and what the domain derives from the
+ * stored-credential position.
  *
  * Nothing here reaches the network: Stripe's SDK resolves its HTTP client through the static
- * `ApiRequestor::setHttpClient()`, so a stub answers every call the client built inside
- * `sendData()` makes, and `afterEach` restores the real one.
+ * `ApiRequestor::setHttpClient()`, so a stub answers every call the client built inside the
+ * operation makes, and `afterEach` restores the real one.
  */
 function stripeOffSessionApi(): object
 {
@@ -62,44 +80,76 @@ function stripeOffSessionApi(): object
 afterEach(fn () => ApiRequestor::setHttpClient(new CurlClient));
 
 /**
- * @param  class-string<AuthorizeRequest|PurchaseRequest>  $class
+ * A stored instrument, because the defect only shows on one: it is `payment_method` rather than
+ * `payment_method_data` in the body that used to be read as "nobody is present".
+ */
+function stripeOffSessionInstrument(): PaymentMethod
+{
+    return new PaymentMethod(
+        PaymentMethodId::generate(),
+        new CreditCard(
+            new Number('424242', '4242', CardBrand::Visa),
+            Expiration::fromMonthAndYear(12, 2030),
+            new Holder('Test'),
+            new Cvc,
+        ),
+        new BillingAddress('Test', 'User', '1 St', 'NYC', new Country('US'), '10001'),
+    );
+}
+
+/**
+ * Built directly rather than through the gateway, because the gateway would go and resolve a
+ * customer for the stored instrument and that is a different subject. What is in question here is
+ * only the branch that decides the flag.
+ *
+ * @param  class-string<Authorize|Charge>  $class
  */
 function stripeOffSessionSend(string $class, ?PaymentInitiation $initiation): object
 {
     $api = stripeOffSessionApi();
 
-    $request = new $class(new OmnipayClient, new HttpRequest);
-    $request->initialize(array_filter([
-        'apiKey' => 'sk_test_fake',
-        'money' => Money::USD(1000),
-        'initiation' => $initiation,
-    ], static fn (mixed $v): bool => $v !== null));
+    $instruments = Mockery::mock(GatewayInstrumentRepository::class);
+    $instruments->shouldReceive('find')->andReturn('pm_saved');
 
-    // Straight to sendData: what getData() does with an instrument is a different subject, and
-    // this needs only the branch that decides the flag.
-    $request->sendData(['amount' => 1000, 'currency' => 'usd', 'payment_method' => 'pm_saved']);
+    $infrastructure = new GatewayInfrastructure(
+        Mockery::mock(GatewayCredential::class, ['getId' => GatewayId::generate()]),
+        Mockery::mock(DecryptInterface::class),
+        $instruments,
+        Mockery::mock(CustomerRepository::class, ['findByInstrument' => null]),
+        ['apiKey' => 'sk_test_fake'],
+    );
+
+    $command = new PlacementCommand(
+        gatewayId: GatewayId::generate(),
+        instrument: stripeOffSessionInstrument(),
+        amount: new Money(1000, new Currency('USD')),
+        initiation: $initiation ?? PaymentInitiation::CardholderInitiated,
+    );
+
+    $operation = new $class($infrastructure, new StripeSettings('sk_test_fake'), $command);
+
+    $operation instanceof Authorize ? $operation->authorize() : $operation->charge();
 
     return $api;
 }
 
 it('does not declare an attended payment off-session, even on a saved card', function (string $class) {
-    // The defect. `payment_method` rather than `payment_method_data` means the card is stored,
-    // which used to be read as "nobody is present" — so every returning customer's checkout went
-    // out claiming an exemption it had no right to.
+    // The defect. A stored `payment_method` used to be read as "nobody is present" — so every
+    // returning customer's checkout went out claiming an exemption it had no right to.
     $api = stripeOffSessionSend($class, PaymentInitiation::CardholderInitiated);
 
     expect($api->params[0])->not->toHaveKey('off_session')
         ->and($api->params[0]['payment_method'])->toBe('pm_saved');
-})->with([AuthorizeRequest::class, PurchaseRequest::class]);
+})->with([Authorize::class, Charge::class]);
 
 it('declares an unattended payment off-session', function (string $class, PaymentInitiation $initiation) {
     // The case the flag exists for, and the one a subscription renewal takes.
     $api = stripeOffSessionSend($class, $initiation);
 
     // The string, not the boolean: that is what the SDK puts on the wire, and pinning the wire
-    // form is the point of reading the params rather than the request object.
+    // form is the point of reading the params rather than the operation object.
     expect($api->params[0]['off_session'])->toBe('true');
-})->with([AuthorizeRequest::class, PurchaseRequest::class])
+})->with([Authorize::class, Charge::class])
     ->with([
         'recurring' => PaymentInitiation::MerchantRecurring,
         'unscheduled' => PaymentInitiation::MerchantUnscheduled,
@@ -112,4 +162,4 @@ it('treats an unstated initiation as attended', function (string $class) {
     $api = stripeOffSessionSend($class, null);
 
     expect($api->params[0])->not->toHaveKey('off_session');
-})->with([AuthorizeRequest::class, PurchaseRequest::class]);
+})->with([Authorize::class, Charge::class]);

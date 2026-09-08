@@ -16,9 +16,12 @@ use Techork\PaymentService\Stripe\Concern\FormatsThreeDS;
  * optional-but-string. Psalm surfaced one of the three; the other two build the same shape
  * through a looser SDK signature and would have stayed invisible.
  *
- * Exercised through the trait rather than through the request classes: those need an
- * omnipay request, an API key and a live SetupIntent call to reach the same lines, and none
- * of that is what is in question here.
+ * Exercised through the trait rather than through the operations: those need an API key and a
+ * live PaymentIntent call to reach the same lines, and none of that is what is in question here.
+ *
+ * The attestation is an argument now rather than something a `getThreeDS()` on the host supplies
+ * — that accessor came off omnipay's parameter bag — so the host below is a bare holder that
+ * hands its own copy straight back in.
  */
 function stripeThreeDSFormatter(?ThreeDSResult $result): object
 {
@@ -28,15 +31,10 @@ function stripeThreeDSFormatter(?ThreeDSResult $result): object
 
         public function __construct(private readonly ?ThreeDSResult $threeDS) {}
 
-        public function getThreeDS(): ?ThreeDSResult
-        {
-            return $this->threeDS;
-        }
-
         /** @return array<string, mixed>|null */
         public function format(): ?array
         {
-            return $this->formatThreeDS();
+            return $this->formatThreeDS($this->threeDS);
         }
     };
 }

@@ -5,9 +5,7 @@ declare(strict_types=1);
 namespace Techork\PaymentService\Stripe;
 
 use Override;
-use Techork\PaymentService\Gateway\Concern\InstrumentParameters;
 use Techork\PaymentService\Stripe\Concern\StripeRequestParameters;
-use Omnipay\Common\Message\AbstractRequest;
 use RuntimeException;
 use Techork\PaymentService\Common\Contract\PaymentInstrument;
 use Techork\PaymentService\Common\Contract\PaymentInstrumentVisitor;
@@ -19,28 +17,46 @@ use Techork\PaymentService\Common\ValueObject\Token;
 use Techork\PaymentService\Gateway\Exception\UnsupportedInstrument;
 use Stripe\Exception\ApiErrorException;
 use Stripe\StripeClient;
+use Techork\PaymentService\Gateway\ValueObject\GatewayInfrastructure;
+use Techork\PaymentService\Gateway\Command\VaultCommand;
+use Techork\PaymentService\Gateway\Contract\RegistrationResult;
 
 /**
  * @implements PaymentInstrumentVisitor<array>
  */
-final class CreateCardRequest extends AbstractRequest implements PaymentInstrumentVisitor
+final class Tokenize implements PaymentInstrumentVisitor
 {
-    use InstrumentParameters;
     use StripeRequestParameters;
 
-    #[Override]
-    public function getData(): array
+    public function __construct(
+        private readonly GatewayInfrastructure $infrastructure,
+        private readonly StripeSettings $settings,
+        private readonly VaultCommand $command,
+        private readonly ?string $customerReference = null,
+    ) {}
+
+    /**
+     * The shape is spelled out rather than left as `array<string, mixed>`, because Stripe's SDK
+     * declares an exhaustive shape for `tokens.create` and a looser type reaches the call as a
+     * coercion. Only {@see visitCreditCard()} returns at all — every other instrument throws —
+     * so the one shape it builds is the whole return type, and the annotation on the accept()
+     * result is what carries it past the visitor's untyped contract.
+     *
+     * @return array{card: array<string, string>}
+     */
+    public function payload(): array
     {
         /** @var PaymentInstrument $instrument */
-        $instrument = $this->getParameter('instrument');
+        $instrument = $this->command->instrument;
 
+        /** @var array{card: array<string, string>} */
         return $instrument->accept($this);
     }
 
     #[Override]
     public function visitCreditCard(CreditCard $card): array
     {
-        $decrypter = $this->getDecrypter();
+        $decrypter = $this->infrastructure->decrypter;
 
         $data = [
             'card' => [
@@ -81,23 +97,16 @@ final class CreateCardRequest extends AbstractRequest implements PaymentInstrume
         throw new RuntimeException('PaymentMethod does not support tokenization.');
     }
 
-    #[Override]
-    public function sendData($data): CreateCardResponse
+    public function tokenize(): RegistrationResult
     {
         try {
-            $stripe = new StripeClient($this->getApiKey());
+            $stripe = new StripeClient($this->settings->apiKey);
 
-            $token = $stripe->tokens->create($data, $this->stripeOpts());
+            $token = $stripe->tokens->create($this->payload(), $this->stripeOpts($this->command->clientUniqueId));
 
-            return new CreateCardResponse($this, [
-                'reference' => $token->id,
-                'error' => null,
-            ]);
+            return RegistrationResult::succeeded($token->id);
         } catch (ApiErrorException $e) {
-            return new CreateCardResponse($this, [
-                'reference' => null,
-                'error' => $e->getMessage(),
-            ]);
+            return RegistrationResult::failed($e->getMessage());
         }
     }
 

@@ -2,66 +2,63 @@
 
 declare(strict_types=1);
 
-use Omnipay\Common\Http\PsrClient as OmnipayClient;
-use Symfony\Component\HttpFoundation\Request as HttpRequest;
-use Techork\PaymentService\Stripe\PurchaseRequest;
+use Techork\PaymentService\Stripe\Concern\StripeRequestParameters;
 
 /**
- * Verifies the {@see Techork\PaymentService\Stripe\Concern\StripeRequestParameters::stripeOpts}
- * helper that builds the Stripe SDK opts array carrying `idempotency_key`.
+ * Verifies the {@see StripeRequestParameters::stripeOpts} helper that builds the Stripe SDK opts
+ * array carrying `idempotency_key`.
  *
- * The trait is exercised through a concrete request class (PurchaseRequest)
- * via reflection — the helper itself is private to all consumers of the
- * trait so we go through one of them.
+ * Exercised through a purpose-built host rather than through an operation class. It used to go
+ * through `PurchaseRequest`, because the id came out of that class's parameter bag and there was
+ * no other way to supply one; it is an argument now, so nothing about an operation participates
+ * in the mapping and the host is the same shape ExtractsCardChecksTest uses.
  */
-function makeStripeRequestForOpts(?string $clientUniqueId): PurchaseRequest
+function stripeOptsHost(): object
 {
-    $request = new PurchaseRequest(new OmnipayClient, new HttpRequest);
-    $request->initialize($clientUniqueId === null ? [] : ['clientUniqueId' => $clientUniqueId]);
+    return new class
+    {
+        use StripeRequestParameters;
 
-    return $request;
-}
-
-function callStripeOpts(PurchaseRequest $request, ?string $scope = null): array
-{
-    return new ReflectionMethod($request, 'stripeOpts')->invoke($request, $scope);
+        /** @return array<string, string> */
+        public function opts(?string $clientUniqueId, ?string $scope = null): array
+        {
+            return $this->stripeOpts($clientUniqueId, $scope);
+        }
+    };
 }
 
 it('returns empty opts when clientUniqueId is null', function () {
-    expect(callStripeOpts(makeStripeRequestForOpts(null)))->toBe([]);
+    expect(stripeOptsHost()->opts(null))->toBe([]);
 });
 
 it('returns empty opts when clientUniqueId is empty string', function () {
-    expect(callStripeOpts(makeStripeRequestForOpts('')))->toBe([]);
+    expect(stripeOptsHost()->opts(''))->toBe([]);
 });
 
 it('emits idempotency_key opt when clientUniqueId is set', function () {
-    expect(callStripeOpts(makeStripeRequestForOpts('pi-uuid-7')))
-        ->toBe(['idempotency_key' => 'pi-uuid-7']);
+    expect(stripeOptsHost()->opts('pi-uuid-7'))->toBe(['idempotency_key' => 'pi-uuid-7']);
 });
 
 it('derives a distinct key per endpoint scope', function () {
-    $request = makeStripeRequestForOpts('pm-uuid-3');
+    $host = stripeOptsHost();
 
-    expect(callStripeOpts($request, 'payment_method'))->toBe(['idempotency_key' => 'pm-uuid-3:payment_method'])
-        ->and(callStripeOpts($request, 'setup_intent'))->toBe(['idempotency_key' => 'pm-uuid-3:setup_intent'])
-        ->and(callStripeOpts($request))->toBe(['idempotency_key' => 'pm-uuid-3']);
+    expect($host->opts('pm-uuid-3', 'payment_method'))->toBe(['idempotency_key' => 'pm-uuid-3:payment_method'])
+        ->and($host->opts('pm-uuid-3', 'setup_intent'))->toBe(['idempotency_key' => 'pm-uuid-3:setup_intent'])
+        ->and($host->opts('pm-uuid-3'))->toBe(['idempotency_key' => 'pm-uuid-3']);
 });
 
 it('keeps a scoped key stable so a retry still deduplicates', function () {
-    $first = makeStripeRequestForOpts('pm-uuid-3');
-    $retry = makeStripeRequestForOpts('pm-uuid-3');
-
-    expect(callStripeOpts($retry, 'setup_intent'))->toBe(callStripeOpts($first, 'setup_intent'));
+    expect(stripeOptsHost()->opts('pm-uuid-3', 'setup_intent'))
+        ->toBe(stripeOptsHost()->opts('pm-uuid-3', 'setup_intent'));
 });
 
 it('stays empty under a scope when there is no id to derive from', function () {
-    expect(callStripeOpts(makeStripeRequestForOpts(null), 'setup_intent'))->toBe([]);
+    expect(stripeOptsHost()->opts(null, 'setup_intent'))->toBe([]);
 });
 
 /**
  * Stripe binds an idempotency key to the endpoint that first used it, so two calls
- * in one request class must not share one. The id is stable, which makes such a
+ * in one operation class must not share one. The id is stable, which makes such a
  * collision permanent rather than transient: every retry burns on it and the
  * operation can never complete. The failure surfaces far from here — as an
  * instrument that is never registered — so it is worth catching structurally.
@@ -81,14 +78,8 @@ it('never hands the same idempotency key to two Stripe endpoints', function () {
     expect($offenders)->toBe([]);
 });
 
-it('round-trips the clientUniqueId via getter/setter', function () {
-    $request = new PurchaseRequest(new OmnipayClient, new HttpRequest);
-
-    expect($request->getClientUniqueId())->toBeNull();
-
-    $request->setClientUniqueId('refund-uuid-9');
-    expect($request->getClientUniqueId())->toBe('refund-uuid-9');
-
-    $request->setClientUniqueId(null);
-    expect($request->getClientUniqueId())->toBeNull();
-});
+/*
+ * `it('round-trips the clientUniqueId via getter/setter')` lived here. The id was a key in
+ * omnipay's parameter bag with a getter and a setter over it; it is a field of the command now,
+ * and the operations read it straight off. There is nothing to round-trip.
+ */

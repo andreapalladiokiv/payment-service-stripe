@@ -4,8 +4,6 @@ declare(strict_types=1);
 
 namespace Techork\PaymentService\Stripe;
 
-use Omnipay\Common\AbstractGateway;
-use Omnipay\Common\Message\AbstractRequest;
 use Override;
 use RuntimeException;
 use Stripe\Exception\ApiErrorException;
@@ -19,9 +17,32 @@ use Techork\PaymentService\Gateway\Contract\Gateway;
 use Techork\PaymentService\Gateway\Contract\GatewayCredential;
 use Techork\PaymentService\Gateway\Contract\GatewayInstrumentRepository;
 use Techork\PaymentService\Gateway\ValueObject\GatewayId;
+use Techork\PaymentService\Gateway\Command\CaptureCommand;
+use Techork\PaymentService\Gateway\Concern\HoldsInfrastructure;
+use Techork\PaymentService\Gateway\ValueObject\GatewayInfrastructure;
+use Techork\PaymentService\Gateway\Contract\GatewayResult;
+use Techork\PaymentService\Gateway\Command\CancelCommand;
+use Techork\PaymentService\Gateway\Command\RefundCommand;
+use Techork\PaymentService\Gateway\Command\PlacementCommand;
+use Techork\PaymentService\Gateway\Command\RebillingCommand;
+use Techork\PaymentService\Gateway\Contract\AuthorizationResult;
+use Techork\PaymentService\Gateway\Command\VaultCommand;
+use Techork\PaymentService\Gateway\Contract\RegistrationResult;
+use Techork\PaymentService\Gateway\Command\IssueCardCommand;
+use Techork\PaymentService\Gateway\Command\TerminateCardCommand;
+use Techork\PaymentService\Gateway\Command\UpdateCardCommand;
+use Techork\PaymentService\Gateway\Contract\VirtualCardResult;
 
-final class StripeGateway extends AbstractGateway implements Gateway
+final class StripeGateway implements Gateway
 {
+    use HoldsInfrastructure;
+
+    private string $apiKey = '';
+
+    private ?string $authenticationUrl = null;
+
+    private ?string $returnUrl = null;
+
     private ?CustomerRepository $customerRepository = null;
 
     #[Override]
@@ -30,146 +51,129 @@ final class StripeGateway extends AbstractGateway implements Gateway
         return 'stripe';
     }
 
-    #[Override]
     public function setCustomerRepository(CustomerRepository $repository): void
     {
         $this->customerRepository = $repository;
     }
 
     #[Override]
-    public function getDefaultParameters(): array
+    public function configure(GatewayInfrastructure $infrastructure): void
     {
-        return ['apiKey' => ''];
+        $this->infrastructure = $infrastructure;
+        $this->customerRepository = $infrastructure->customers;
+        $this->apiKey = $infrastructure->stringSetting('apiKey');
+
+        // One value per deployment rather than per payment, which is what separates it from
+        // anything a command carries: it is where a cardholder comes back to after a step-up.
+        $authenticationUrl = $infrastructure->stringSetting('authenticationUrl');
+        $this->authenticationUrl = $authenticationUrl === '' ? null : $authenticationUrl;
+
+        $returnUrl = $infrastructure->stringSetting('returnUrl');
+        $this->returnUrl = $returnUrl === '' ? null : $returnUrl;
     }
 
     public function getApiKey(): string
     {
-        return $this->getParameter('apiKey') ?? '';
-    }
-
-    public function setApiKey(string $value): static
-    {
-        return $this->setParameter('apiKey', $value);
-    }
-
-    public function createCustomer(array $parameters = []): AbstractRequest
-    {
-        return $this->createRequest(CreateCustomerRequest::class, $parameters);
-    }
-
-    public function updateCustomer(array $parameters = []): AbstractRequest
-    {
-        return $this->createRequest(UpdateCustomerRequest::class, $parameters);
+        return $this->apiKey;
     }
 
     /**
-     * Where this deployment hosts the page that conducts a Stripe-side authentication.
-     *
-     * Configuration, not a payment parameter: it is a property of the deployment the way a
-     * webhook address is, the same for every payment, and it has no business in a
-     * gateway-agnostic `authorize()` signature. It arrives through the credential —
-     * {@see \Techork\PaymentService\Gateway\GatewayFactory} hands
-     * `$credential->getCredentials()` to `initialize()`, and omnipay merges gateway
-     * parameters into every request it builds.
-     *
-     * Needed because Stripe is the one gateway that does not answer a 3DS card with an
-     * address. ConnexPay returns `redirectUrl` and Nuvei returns `acsUrl`; Stripe answers
-     * `use_stripe_sdk`, which means "run our JavaScript" and has no address at all. So one
-     * is minted here, pointing at a page that loads Stripe.js — and the challenge comes
-     * back the same shape as every other gateway's.
-     *
-     * A setter is what makes it arrive: omnipay applies a credential key only when a
-     * matching `set…()` exists ({@see \Omnipay\Common\Helper::initialize}), and drops it
-     * in silence otherwise.
+     * Mints a Stripe Customer. Not a role the contract knows about — nothing routes here — but a
+     * PaymentMethod with no Customer is single-use, so {@see resolveCustomerReference()} creates
+     * one when an instrument arrives with nobody to belong to.
      */
-    public function setAuthenticationUrl(?string $value): self
+    public function createCustomer(string $email = '', ?BillingAddress $billingAddress = null): GatewayResult
     {
-        return $this->setParameter('authenticationUrl', $value);
+        return new CreateCustomer($this->settings(), $email, $billingAddress)->create();
+    }
+
+    public function updateCustomer(string $customerReference = '', string $email = '', ?BillingAddress $billingAddress = null): GatewayResult
+    {
+        return new UpdateCustomer($this->settings(), $customerReference, $email, $billingAddress)->update();
     }
 
     public function getAuthenticationUrl(): ?string
     {
-        $url = $this->getParameter('authenticationUrl');
+        $url = $this->authenticationUrl;
 
         return is_string($url) && $url !== '' ? $url : null;
     }
 
+    #[Override]
+    public function tokenize(VaultCommand $command): RegistrationResult
+    {
+        return new Tokenize(
+            $this->infrastructure(),
+            $this->settings(),
+            $command,
+            $this->resolveCustomerReference($this->infrastructure()->credential, $command->instrument, $command->billingAddress, $this->infrastructure()->instruments),
+        )->tokenize();
+    }
+
+    #[Override]
+    public function registerPaymentMethod(VaultCommand $command): RegistrationResult
+    {
+        return new RegisterPaymentMethod(
+            $this->infrastructure(),
+            $this->settings(),
+            $command,
+            $this->resolveCustomerReference($this->infrastructure()->credential, $command->instrument, $command->billingAddress, $this->infrastructure()->instruments),
+        )->register();
+    }
+
+    #[Override]
+    public function charge(PlacementCommand $command): AuthorizationResult
+    {
+        return new Charge(
+            $this->infrastructure(),
+            $this->settings(),
+            $command,
+            $this->resolveCustomerReference($this->infrastructure()->credential, $command->instrument, $command->billingAddress, $this->infrastructure()->instruments),
+        )->charge();
+    }
+
+    #[Override]
+    public function authorize(PlacementCommand $command): AuthorizationResult
+    {
+        return new Authorize(
+            $this->infrastructure(),
+            $this->settings(),
+            $command,
+            $this->resolveCustomerReference($this->infrastructure()->credential, $command->instrument, $command->billingAddress, $this->infrastructure()->instruments),
+        )->authorize();
+    }
+
     /**
-     * Where Stripe brings the cardholder back after an authentication IT hosts.
-     *
-     * Configuration for the same reason, and the alternative to the page above: given one,
-     * Stripe answers `redirect_to_url` and hosts the challenge itself. Leaving it unset is
-     * the ordinary case — omnipay's `AbstractRequest` already carries the parameter down,
-     * so only this gateway-level setter is needed for a credential to name it.
+     * The same provider call as {@see authorize()}, with the series position added — which is why
+     * the two share an operation class and differ only in what the command puts in it. It is still
+     * a separate operation, because whether a payment belongs to a series is the caller's to state
+     * and no field of an ordinary authorization implies it.
      */
-    public function setReturnUrl(?string $value): self
+    #[Override]
+    public function authorizeRebilling(RebillingCommand $command): AuthorizationResult
     {
-        return $this->setParameter('returnUrl', $value);
-    }
-
-    public function createCard(array $options = []): AbstractRequest
-    {
-        return $this->createRequest(CreateCardRequest::class, $options);
+        return new Authorize(
+            $this->infrastructure(),
+            $this->settings(),
+            $command->toPlacement(),
+            $this->resolveCustomerReference($this->infrastructure()->credential, $command->instrument, $command->billingAddress, $this->infrastructure()->instruments),
+        )->authorize();
     }
 
     #[Override]
-    public function createPaymentMethod(array $options = []): AbstractRequest
+    public function capture(CaptureCommand $command): GatewayResult
     {
-        $customerReference = $this->resolveCustomerReference(
-            $options['gateway'] ?? null,
-            $options['instrument'] ?? null,
-            $options['billingAddress'] ?? null,
-            $options['referenceResolver'] ?? null,
-        );
-        if ($customerReference !== null) {
-            $options['customerReference'] = $customerReference;
-        }
-
-        return $this->createRequest(CreatePaymentMethodRequest::class, $options);
-    }
-
-    public function purchase(array $options = []): AbstractRequest
-    {
-        $customerReference = $this->resolveCustomerReference(
-            $options['gateway'] ?? null,
-            $options['instrument'] ?? null,
-            $options['billingAddress'] ?? null,
-            $options['referenceResolver'] ?? null,
-        );
-        if ($customerReference !== null) {
-            $options['customerReference'] = $customerReference;
-        }
-
-        return $this->createRequest(PurchaseRequest::class, $options);
-    }
-
-    public function authorize(array $options = []): AbstractRequest
-    {
-        $customerReference = $this->resolveCustomerReference(
-            $options['gateway'] ?? null,
-            $options['instrument'] ?? null,
-            $options['billingAddress'] ?? null,
-            $options['referenceResolver'] ?? null,
-        );
-        if ($customerReference !== null) {
-            $options['customerReference'] = $customerReference;
-        }
-
-        return $this->createRequest(AuthorizeRequest::class, $options);
-    }
-
-    public function capture(array $options = []): AbstractRequest
-    {
-        return $this->createRequest(CaptureRequest::class, $options);
-    }
-
-    public function refund(array $options = []): AbstractRequest
-    {
-        return $this->createRequest(RefundRequest::class, $options);
+        return new Capture($this->settings(), $command)->capture();
     }
 
     #[Override]
-    public function retryRefund(array $options = []): AbstractRequest
+    public function refund(RefundCommand $command): GatewayResult
+    {
+        return new Refund($this->settings(), $command)->refund();
+    }
+
+    #[Override]
+    public function retryRefund(RefundCommand $command): GatewayResult
     {
         // Stripe's Refund API can only return funds along the original
         // PaymentIntent — there is no public primitive to redirect a
@@ -181,7 +185,7 @@ final class StripeGateway extends AbstractGateway implements Gateway
         // {@see \Techork\PaymentService\Gateway\Exception\UnsupportedOperation} asks whether a
         // caller here means a missing primitive for something the gateway otherwise supports,
         // or a misroute. Stripe refunds fine; only redirecting one onto another card is absent,
-        // and PaymentGatewayRouter::refund relies on that falling through its catch as a failed
+        // and the gateway stack::refund relies on that falling through its catch as a failed
         // GatewayResult so the aggregate records RefundFailed and the saga carries on. Marking
         // it would rethrow instead and break step 2 of that method.
         throw new RuntimeException(
@@ -191,13 +195,13 @@ final class StripeGateway extends AbstractGateway implements Gateway
     }
 
     #[Override]
-    public function void(array $options = []): AbstractRequest
+    public function cancel(CancelCommand $command): GatewayResult
     {
-        return $this->createRequest(VoidRequest::class, $options);
+        return new Cancel($this->settings(), $command)->cancel();
     }
 
     #[Override]
-    public function issueVirtualCard(array $options = []): AbstractRequest
+    public function issueVirtualCard(IssueCardCommand $command): VirtualCardResult
     {
         throw UnsupportedOperation::forGateway(
             'stripe',
@@ -207,7 +211,7 @@ final class StripeGateway extends AbstractGateway implements Gateway
     }
 
     #[Override]
-    public function updateVirtualCard(array $options = []): AbstractRequest
+    public function updateVirtualCard(UpdateCardCommand $command): VirtualCardResult
     {
         throw UnsupportedOperation::forGateway(
             'stripe',
@@ -217,7 +221,7 @@ final class StripeGateway extends AbstractGateway implements Gateway
     }
 
     #[Override]
-    public function terminateVirtualCard(array $options = []): AbstractRequest
+    public function terminateVirtualCard(TerminateCardCommand $command): GatewayResult
     {
         throw UnsupportedOperation::forGateway(
             'stripe',
@@ -259,7 +263,7 @@ final class StripeGateway extends AbstractGateway implements Gateway
         }
 
         // Email is not a precondition here. Stripe's `customers.create` requires no field
-        // at all, and {@see CreateCustomerRequest::getData} already filters an absent one
+        // at all, and {@see CreateCustomer::payload()} already filters an absent one
         // out. Gating on it made a missing email — which is optional on our side — decide
         // whether the instrument gets a Customer, and a PaymentMethod without a Customer
         // is single-use: the SetupIntent confirm spends it, and Stripe then refuses it
@@ -270,13 +274,13 @@ final class StripeGateway extends AbstractGateway implements Gateway
             return null;
         }
 
-        $response = $this->createCustomer(['billingAddress' => $billingAddress])->send();
+        $created = $this->createCustomer(billingAddress: $billingAddress);
 
-        if (! $response->isSuccessful()) {
-            throw new RuntimeException("Stripe createCustomer failed: {$response->getMessage()}");
+        if (! $created->success) {
+            throw new RuntimeException("Stripe createCustomer failed: {$created->message}");
         }
 
-        $customerReference = $response->getTransactionReference()
+        $customerReference = $created->reference
             ?? throw new RuntimeException('Stripe createCustomer returned no reference.');
 
         $this->customerRepository->saveAndAttach($gatewayId, $instrument, $customerReference);
@@ -326,4 +330,10 @@ final class StripeGateway extends AbstractGateway implements Gateway
 
         return $customerReference;
     }
+
+    private function settings(): StripeSettings
+    {
+        return new StripeSettings($this->apiKey, $this->authenticationUrl, $this->returnUrl);
+    }
+
 }

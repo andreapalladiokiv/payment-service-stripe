@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace Techork\PaymentService\Stripe;
 
-use Omnipay\Common\Message\AbstractRequest;
 use Override;
 use RuntimeException;
 use Stripe\Exception\ApiErrorException;
@@ -14,38 +13,52 @@ use Techork\PaymentService\Common\Contract\PaymentInstrumentVisitor;
 use Techork\PaymentService\Common\ValueObject\BillingAddress;
 use Techork\PaymentService\Common\ValueObject\Cash;
 use Techork\PaymentService\Common\ValueObject\CreditCard;
+use Techork\PaymentService\Common\ValueObject\CreditCard\CheckResult;
 use Techork\PaymentService\Common\ValueObject\HostedPayment;
 use Techork\PaymentService\Common\ValueObject\PaymentMethod;
 use Techork\PaymentService\Common\ValueObject\Token;
-use Techork\PaymentService\Gateway\Exception\UnsupportedInstrument;
-use Techork\PaymentService\Gateway\Concern\InstrumentParameters;
+use Techork\PaymentService\Gateway\Command\VaultCommand;
 use Techork\PaymentService\Gateway\Contract\GatewayCredential;
+use Techork\PaymentService\Gateway\Contract\RegistrationResult;
+use Techork\PaymentService\Gateway\Exception\UnsupportedInstrument;
+use Techork\PaymentService\Gateway\ValueObject\GatewayInfrastructure;
 use Techork\PaymentService\Stripe\Concern\ExtractsCardChecks;
-use Techork\PaymentService\Stripe\Concern\FormatsThreeDS;
 use Techork\PaymentService\Stripe\Concern\StripeRequestParameters;
 
 /**
+ * Stores a card with Stripe as a reusable PaymentMethod attached to a Customer.
+ *
+ * Three provider calls, not one: create the PaymentMethod, attach it to the customer, then
+ * confirm a SetupIntent so Stripe runs its checks and saves the card for off-session reuse.
+ * {@see payload()} builds only the first of them — the part that depends on the instrument — and
+ * {@see register()} makes the sequence and answers with what came back.
+ *
  * @implements PaymentInstrumentVisitor<array>
  */
-final class CreatePaymentMethodRequest extends AbstractRequest implements PaymentInstrumentVisitor
+final class RegisterPaymentMethod implements PaymentInstrumentVisitor
 {
     use ExtractsCardChecks;
-    use FormatsThreeDS;
-    use InstrumentParameters;
     use StripeRequestParameters;
 
-    #[Override]
-    public function getData(): array
-    {
-        $this->validate('instrument', 'gateway');
+    public function __construct(
+        private readonly GatewayInfrastructure $infrastructure,
+        private readonly StripeSettings $settings,
+        private readonly VaultCommand $command,
+        private readonly ?string $customerReference = null,
+    ) {}
 
+    /**
+     * @return array<string, mixed>
+     */
+    public function payload(): array
+    {
         /** @var PaymentInstrument $instrument */
-        $instrument = $this->getParameter('instrument');
+        $instrument = $this->command->instrument;
 
         $paymentMethodData = $instrument->accept($this);
 
         /** @var ?BillingAddress $billingAddress */
-        $billingAddress = $this->getParameter('billingAddress');
+        $billingAddress = $this->command->billingAddress;
         $billingDetails = $this->formatBillingDetails($billingAddress);
         if ($billingDetails !== null && $billingDetails !== []) {
             $paymentMethodData['billing_details'] = $billingDetails;
@@ -53,14 +66,14 @@ final class CreatePaymentMethodRequest extends AbstractRequest implements Paymen
 
         return [
             'payment_method_data' => $paymentMethodData,
-            'customerReference' => $this->getCustomerReference(),
+            'customerReference' => ($this->customerReference ?? ''),
         ];
     }
 
     #[Override]
     public function visitCreditCard(CreditCard $card): array
     {
-        $decrypter = $this->getDecrypter();
+        $decrypter = $this->infrastructure->decrypter;
 
         return [
             'type' => 'card',
@@ -83,8 +96,8 @@ final class CreatePaymentMethodRequest extends AbstractRequest implements Paymen
     public function visitToken(Token $token): array
     {
         /** @var GatewayCredential $gateway */
-        $gateway = $this->getParameter('gateway');
-        $reference = $this->getReferenceResolver()->find($gateway->getId(), $token)
+        $gateway = $this->infrastructure->credential;
+        $reference = $this->infrastructure->instruments->find($gateway->getId(), $token)
             ?? throw new RuntimeException("No Stripe reference found for token {$token->id}.");
 
         return [
@@ -100,8 +113,15 @@ final class CreatePaymentMethodRequest extends AbstractRequest implements Paymen
     }
 
     #[Override]
-    public function sendData($data): CreatePaymentMethodResponse
+    public function visitHostedPayment(HostedPayment $hosted): never
     {
+        throw UnsupportedInstrument::forGateway('stripe', 'createPaymentMethod', $hosted);
+    }
+
+    public function register(): RegistrationResult
+    {
+        $data = $this->payload();
+
         // Refuse rather than mint an instrument that cannot be reused. Registration
         // promises a PaymentMethod chargeable again later, and in Stripe that requires a
         // Customer: an unattached PM is spent by the SetupIntent confirm below and is
@@ -109,18 +129,17 @@ final class CreatePaymentMethodRequest extends AbstractRequest implements Paymen
         // store a pm_xxx that fails at payment time — far from here, and looking like a
         // decline rather than like this.
         if ($data['customerReference'] === '') {
-            return new CreatePaymentMethodResponse($this, [
-                'reference' => null,
-                'error' => 'Stripe registration needs a customer: a PaymentMethod with no customer can only be used once.',
-            ]);
+            return RegistrationResult::failed(
+                'Stripe registration needs a customer: a PaymentMethod with no customer can only be used once.',
+            );
         }
 
         try {
-            $stripe = new StripeClient($this->getApiKey());
+            $stripe = new StripeClient($this->settings->apiKey);
 
             // Two endpoints, so two scoped keys — Stripe pins an idempotency key to
             // the endpoint that first used it. See {@see StripeRequestParameters::stripeOpts}.
-            $paymentMethod = $stripe->paymentMethods->create($data['payment_method_data'], $this->stripeOpts('payment_method'));
+            $paymentMethod = $stripe->paymentMethods->create($data['payment_method_data'], $this->stripeOpts($this->command->clientUniqueId, 'payment_method'));
 
             $stripe->paymentMethods->attach($paymentMethod->id, ['customer' => (string) $data['customerReference']]);
 
@@ -131,7 +150,7 @@ final class CreatePaymentMethodRequest extends AbstractRequest implements Paymen
             // `requires_action` is acceptable here because the card is already attached —
             // that happened above, before this call — so it is chargeable with the
             // cardholder present, and the 3DS Stripe wanted is re-challenged at the first
-            // charge. That last part is only true now that {@see AuthorizeResponse} reads
+            // charge. That last part is only true now that {@see PaymentIntentOutcome} reads
             // success off the status: a re-challenge used to come back as a completed
             // authorization, which is exactly how a card registered this way went on to be
             // captured without ever having been authorized.
@@ -140,6 +159,12 @@ final class CreatePaymentMethodRequest extends AbstractRequest implements Paymen
             // on a card whose set-up never completed can still be refused for want of
             // authentication, and `RegistrationResult` has no way to say "usable while the
             // cardholder is here".
+            //
+            // No `payment_method_options` block: the SetupIntent used to be given one built from
+            // an authentication read off the parameter bag, and the bag was never filled on this
+            // path — a {@see VaultCommand} carries no attestation, because vaulting a card is not
+            // a payment and there is nothing for an issuer to have authenticated. The block was
+            // unreachable, and it is left out rather than written as an unconditional null.
             $setupParams = [
                 'payment_method' => $paymentMethod->id,
                 'customer' => $data['customerReference'],
@@ -147,41 +172,24 @@ final class CreatePaymentMethodRequest extends AbstractRequest implements Paymen
                 'automatic_payment_methods' => ['enabled' => true, 'allow_redirects' => 'never'],
             ];
 
-            $paymentMethodOptions = $this->formatThreeDS();
-            if ($paymentMethodOptions !== null) {
-                $setupParams['payment_method_options'] = $paymentMethodOptions;
-            }
-
-            $stripe->setupIntents->create($setupParams, $this->stripeOpts('setup_intent'));
+            $stripe->setupIntents->create($setupParams, $this->stripeOpts($this->command->clientUniqueId, 'setup_intent'));
 
             $paymentMethod = $stripe->paymentMethods->retrieve($paymentMethod->id);
 
-            return new CreatePaymentMethodResponse($this, [
-                'reference' => $paymentMethod->id,
-                'error' => null,
-                ...$this->extractStripeChecks($paymentMethod),
-            ]);
+            $checks = $this->extractStripeChecks($paymentMethod);
+
+            return RegistrationResult::succeeded($paymentMethod->id)->withChecks(
+                self::check($checks['address_line_check']),
+                self::check($checks['postal_code_check']),
+                self::check($checks['cvc_check']),
+            );
         } catch (ApiErrorException $e) {
-            return new CreatePaymentMethodResponse($this, [
-                'reference' => null,
-                'error' => $e->getMessage(),
-            ]);
+            return RegistrationResult::failed($e->getMessage());
         }
     }
 
-    public function getCustomerReference(): string
+    private static function check(?string $raw): ?CheckResult
     {
-        return $this->getParameter('customerReference') ?? '';
-    }
-
-    public function setCustomerReference(string $value): self
-    {
-        return $this->setParameter('customerReference', $value);
-    }
-
-    #[Override]
-    public function visitHostedPayment(HostedPayment $hosted): never
-    {
-        throw UnsupportedInstrument::forGateway('stripe', 'createPaymentMethod', $hosted);
+        return $raw === null ? null : CheckResult::from($raw);
     }
 }

@@ -4,11 +4,17 @@ declare(strict_types=1);
 
 namespace Techork\PaymentService\Stripe\Concern;
 
+use Techork\PaymentService\Common\ValueObject\ThreeDS\ThreeDSResult;
 use Techork\PaymentService\Gateway\Exception\IncompleteAuthentication;
 
 /**
  * Maps an authentication result onto Stripe's `payment_method_options` block, or null when
  * the operation carries no authentication.
+ *
+ * The attestation arrives as an argument rather than through a `getThreeDS()` the operation was
+ * expected to supply. That accessor came off Omnipay's parameter bag, and the trait reading it
+ * back made every user of this block a class that had to be a bag — which is exactly what the
+ * commands replaced. It is the operation's own `PlacementCommand->threeDS` now, passed in.
  *
  * Three request classes built this inline and identically, each sending explicit `null`s.
  * Stripe declares every member of the block as optional but NOT nullable
@@ -36,18 +42,20 @@ trait FormatsThreeDS
     /**
      * @return array{card: array{three_d_secure: array<string, string>}}|null
      */
-    protected function formatThreeDS(): ?array
+    protected function formatThreeDS(?ThreeDSResult $threeDS): ?array
     {
-        $threeDS = $this->getThreeDS();
-
         if ($threeDS === null) {
             return null;
         }
 
         if (($threeDS->authenticationValue ?? '') === '') {
+            // The operation names itself. Each of these classes is named for the operation it
+            // performs, so the short class name IS the operation — where it used to be the class
+            // name with a `Request` suffix stripped off, because the class was a request rather
+            // than the operation.
             throw IncompleteAuthentication::missingFields(
                 'stripe',
-                lcfirst((string) preg_replace('/Request$/', '', basename(str_replace('\\', '/', static::class)))),
+                lcfirst(basename(str_replace('\\', '/', static::class))),
                 ['cryptogram'],
             );
         }

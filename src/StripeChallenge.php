@@ -72,7 +72,7 @@ final readonly class StripeChallenge
         }
 
         return new ThreeDSChallenge(
-            authenticationId: (string) $paymentIntent->id,
+            authenticationId: $paymentIntent->id,
             url: $url,
         );
     }
@@ -83,7 +83,13 @@ final readonly class StripeChallenge
         // to claim it does not. `server_transaction_id` is the `threeDSServerTransID`, the
         // value the directory server keeps too, so a later result matches on it. The intent
         // id stands in if a shape without it ever arrives.
-        $serverTransactionId = $nextAction->use_stripe_sdk?->server_transaction_id;
+        //
+        // Read through `??` rather than `?->`, which is the same repair the `redirect_to_url`
+        // branch already got: `?->` still reaches `StripeObject::__get` when the property is
+        // absent, and that logs "Stripe Notice: Undefined property of …" before answering null.
+        // Absent is ordinary here — `three_d_secure_redirect` carries no server transaction id —
+        // so the bare read wrote a line of noise for a whole shape of step-up.
+        $serverTransactionId = $nextAction->use_stripe_sdk->server_transaction_id ?? null;
         $authenticationId = is_string($serverTransactionId) && $serverTransactionId !== ''
             ? $serverTransactionId
             : (string) $paymentIntent->id;
@@ -95,13 +101,13 @@ final readonly class StripeChallenge
         if ($authenticationUrl !== null) {
             return new ThreeDSChallenge(
                 authenticationId: $authenticationId,
-                url: $authenticationUrl.'/'.$paymentIntent->id,
+                url: "$authenticationUrl/$paymentIntent->id",
             );
         }
 
         return new SdkChallenge(
             authenticationId: $authenticationId,
-            paymentReference: (string) $paymentIntent->id,
+            paymentReference: $paymentIntent->id,
         );
     }
 }
