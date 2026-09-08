@@ -22,7 +22,7 @@ use Techork\PaymentService\Common\ValueObject\PaymentMethodId;
 use Techork\PaymentService\Common\ValueObject\Token;
 use Techork\PaymentService\Common\ValueObject\TokenId;
 use Techork\PaymentService\Gateway\Command\PlacementCommand;
-use Techork\PaymentService\Gateway\Contract\CustomerRepository;
+use Techork\PaymentService\Gateway\Contract\GatewayCustomerRepository;
 use Techork\PaymentService\Gateway\Contract\GatewayCredential;
 use Techork\PaymentService\Gateway\Contract\GatewayInstrumentRepository;
 use Techork\PaymentService\Gateway\Exception\UnsupportedInstrument;
@@ -42,7 +42,7 @@ function stripeGateway(): StripeGateway
         Mockery::mock(GatewayCredential::class, ['getId' => GatewayId::generate()]),
         Mockery::mock(DecryptInterface::class),
         Mockery::mock(GatewayInstrumentRepository::class, ['find' => null]),
-        Mockery::mock(CustomerRepository::class, ['findByInstrument' => null]),
+        Mockery::mock(GatewayCustomerRepository::class, ['find' => null]),
         ['apiKey' => 'sk_test_fake'],
     ));
 
@@ -126,7 +126,7 @@ function stripeAuthorizeOperation(array $options): Authorize
         $options['gateway'] ?? Mockery::mock(GatewayCredential::class, ['getId' => GatewayId::generate()]),
         $options['decrypter'] ?? Mockery::mock(DecryptInterface::class),
         $options['referenceResolver'] ?? Mockery::mock(GatewayInstrumentRepository::class, ['find' => null]),
-        $options['customerRepository'] ?? Mockery::mock(CustomerRepository::class, ['findByInstrument' => null]),
+        $options['customerRepository'] ?? Mockery::mock(GatewayCustomerRepository::class, ['find' => null]),
         ['apiKey' => 'sk_test_fake'],
     );
 
@@ -224,17 +224,52 @@ it('builds authorize data for payment method with tok_ reference', function () {
 });
 
 /**
- * The customer is resolved by the gateway from the instrument's owner, not handed in with the
- * payment. It used to be possible to pass one through the options array; a
- * {@see \Techork\PaymentService\Gateway\Command\PlacementCommand} has no slot for it, which is
- * the point — a payment names an instrument, and who that instrument belongs to is a fact to look
- * up rather than one for the caller to assert.
+ * The customer is NAMED on the payment and the gateway looks up what Stripe calls them.
+ *
+ * It used to start from the instrument: resolution asked "which customer owns this card", which is
+ * a question a raw card can never answer and an expiring token could. So a payment carried a
+ * customer only if a card had been stored for one, and the caller had no way to say who was
+ * paying even when it knew. Now the caller says, and the gateway's only job is the translation
+ * from our id to `cus_...`.
  */
-it('includes the customer reference the gateway resolved for the instrument', function () {
+it('includes the reference the gateway looked up for the named customer', function () {
     $sent = fakeStripeHttp(['id' => 'pi_1', 'object' => 'payment_intent', 'status' => 'requires_capture']);
 
-    $customers = Mockery::mock(CustomerRepository::class);
-    $customers->shouldReceive('findByInstrument')->andReturn('cus_abc');
+    $customers = Mockery::mock(GatewayCustomerRepository::class);
+    $customers->shouldReceive('find')->andReturn('cus_abc');
+
+    $gateway = stripeGateway();
+    $gateway->configure(new GatewayInfrastructure(
+        fakeCredential(),
+        fakeDecrypter(),
+        Mockery::mock(GatewayInstrumentRepository::class, ['find' => null]),
+        $customers,
+        ['apiKey' => 'sk_test_fake'],
+    ));
+
+    $gateway->authorize(new PlacementCommand(
+        gatewayId: GatewayId::generate(),
+        // A raw card, deliberately: this is the case the instrument-keyed lookup could never
+        // resolve, so a payment by someone we know used to reach Stripe as anonymous.
+        instrument: testCard(),
+        amount: new Money(5000, new Currency('USD')),
+        customerId: stripeSuiteCustomerId(),
+    ));
+
+    // Through the intent Stripe received: the resolved reference is a constructor argument on the
+    // operation and never a property of the command, so the wire is where it surfaces.
+    expect(lastStripeRequestTo($sent, 'payment_intents')['customer'])->toBe('cus_abc');
+});
+
+/**
+ * And nobody named means no `customer` on the intent, which for a one-off charge is correct: a
+ * payment can belong to somebody we have no record of.
+ */
+it('sends no customer when the payment names none', function () {
+    $sent = fakeStripeHttp(['id' => 'pi_1', 'object' => 'payment_intent', 'status' => 'requires_capture']);
+
+    $customers = Mockery::mock(GatewayCustomerRepository::class);
+    $customers->shouldNotReceive('find');
 
     $gateway = stripeGateway();
     $gateway->configure(new GatewayInfrastructure(
@@ -251,9 +286,7 @@ it('includes the customer reference the gateway resolved for the instrument', fu
         amount: new Money(5000, new Currency('USD')),
     ));
 
-    // Through the intent Stripe received: the resolved reference is a constructor argument on the
-    // operation and never a property of the command, so the wire is where it surfaces.
-    expect(lastStripeRequestTo($sent, 'payment_intents')['customer'])->toBe('cus_abc');
+    expect(lastStripeRequestTo($sent, 'payment_intents'))->not->toHaveKey('customer');
 });
 
 afterEach(function () {

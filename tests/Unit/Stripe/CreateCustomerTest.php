@@ -7,6 +7,8 @@ use Stripe\HttpClient\ClientInterface;
 use Stripe\HttpClient\CurlClient;
 use Techork\PaymentService\Common\ValueObject\BillingAddress;
 use Techork\PaymentService\Common\ValueObject\Country;
+use Techork\PaymentService\Common\ValueObject\CustomerIdentity;
+use Techork\PaymentService\Common\ValueObject\Email;
 use Techork\PaymentService\Common\ValueObject\State;
 use Techork\PaymentService\Stripe\CreateCustomer;
 use Techork\PaymentService\Stripe\StripeSettings;
@@ -52,7 +54,9 @@ function stripeCreateCustomer(array $parameters = []): CreateCustomer
 {
     return new CreateCustomer(
         new StripeSettings($parameters['apiKey'] ?? 'sk_test_fake'),
-        $parameters['email'] ?? '',
+        $parameters['identity'] ?? (isset($parameters['email'])
+            ? new CustomerIdentity('Test', 'User', new Email($parameters['email']))
+            : null),
         $parameters['billingAddress'] ?? null,
     );
 }
@@ -102,7 +106,7 @@ afterEach(function () {
  */
 it('omits the address block entirely when no address part is known', function () {
     expect(stripeCreateCustomer(['email' => 'buyer@example.com'])->payload())
-        ->toBe(['email' => 'buyer@example.com']);
+        ->toBe(['name' => 'Test User', 'email' => 'buyer@example.com']);
 });
 
 /**
@@ -126,6 +130,7 @@ it('maps a known address onto the Stripe address key names', function () {
     ])->payload();
 
     expect($data)->toBe([
+        'name' => 'Test User',
         'email' => 'buyer@example.com',
         'address' => [
             'line1' => '1 Market Street',
@@ -154,17 +159,74 @@ it('keeps the known address parts and drops the unknown ones', function () {
 });
 
 /**
- * A missing email coalesces to '' and `array_filter` then removes it — so an
- * operation with no email produces an empty payload and Stripe creates an
- * anonymous customer that no future lookup can find by email.
+ * Nothing known about the person produces an empty payload, and Stripe creates a customer from
+ * it anyway — `customers.create` requires no field at all, which is why the email gate that used
+ * to guard this call was removable.
  *
- * Pinned as a statement about this class rather than as a defect: creating one
- * anyway is deliberate, because a PaymentMethod with no Customer is single-use
- * and an address without an email must still get its owner a record. See
- * {@see \Techork\PaymentService\Stripe\StripeGateway::resolveCustomerReference()}.
+ * Reachable only from a host calling {@see \Techork\PaymentService\Stripe\StripeGateway::createCustomer()}
+ * with nothing: the routed operation refuses an unnamed customer before it gets here, and the
+ * identity it passes always carries a name.
  */
-it('produces an empty payload when no email was supplied', function () {
+it('produces an empty payload when nothing at all is known about the person', function () {
     expect(stripeCreateCustomer()->payload())->toBe([]);
+});
+
+/**
+ * The identity answers and the address is the fallback — the same order every provider here now
+ * reads them in.
+ *
+ * That order is the change. The address used to be the ONLY source, because it was where the
+ * payer's name and email were kept, one copy per card; resolution assembled a person out of
+ * whichever address happened to ride along with the payment being made. So the assertion worth
+ * having is not that an identity works, it is that it WINS: two different people are named here
+ * and the customer is the one the caller passed.
+ */
+it('takes the person from the identity and the address from the address', function () {
+    $data = stripeCreateCustomer([
+        'identity' => new CustomerIdentity('Ada', 'Lovelace', new Email('ada@example.com')),
+        'billingAddress' => new BillingAddress(
+            firstName: 'Whoever',
+            lastName: 'Paid',
+            line: '1 Market Street',
+            city: 'Miami',
+            country: new Country('US'),
+            postalCode: '33101',
+            email: new Email('whoever@example.com'),
+        ),
+    ])->payload();
+
+    expect($data['name'])->toBe('Ada Lovelace')
+        ->and($data['email'])->toBe('ada@example.com')
+        // The address is not replaced by the identity, and must not be: it is a separate fact,
+        // and at more than one provider the same object carries the AVS payload.
+        ->and($data['address'])->toBe([
+            'line1' => '1 Market Street',
+            'city' => 'Miami',
+            'country' => 'US',
+            'postal_code' => '33101',
+        ]);
+});
+
+/**
+ * With nobody named, the address still answers. It is the honest reading of what we have — the
+ * address is where the payer's name and email have been kept all along — and it is what keeps a
+ * host that has not adopted customers yet working exactly as it did.
+ */
+it('falls back to the address when no identity was passed', function () {
+    $data = stripeCreateCustomer([
+        'billingAddress' => new BillingAddress(
+            firstName: 'Whoever',
+            lastName: 'Paid',
+            line: '1 Market Street',
+            city: 'Miami',
+            country: new Country('US'),
+            postalCode: '33101',
+            email: new Email('whoever@example.com'),
+        ),
+    ])->payload();
+
+    expect($data['name'])->toBe('Whoever Paid')
+        ->and($data['email'])->toBe('whoever@example.com');
 });
 
 /*
@@ -194,7 +256,7 @@ it('creates the customer and reports the cus_ id as the reference', function () 
         ->and($result->reference)->toBe('cus_created')
         ->and($result->message)->toBeNull()
         ->and($api->calls[0]['url'])->toBe('https://api.stripe.com/v1/customers')
-        ->and($api->calls[0]['params'])->toBe(['email' => 'buyer@example.com']);
+        ->and($api->calls[0]['params'])->toBe(['name' => 'Test User', 'email' => 'buyer@example.com']);
 });
 
 /**
@@ -213,10 +275,10 @@ it('sends no idempotency key, so duplicate protection rests on the caller', func
 });
 
 /**
- * A rejected customer must come back as a failed result, because the gateway's
- * customer resolution reads `success` and raises its own `RuntimeException`
- * from it. An `ApiErrorException` escaping instead would bypass that and
- * surface as an unhandled error mid-payment.
+ * A rejected customer must come back as a failed result, because
+ * {@see \Techork\PaymentService\Stripe\StripeGateway::registerCustomer()} reads `success` and
+ * turns it into a failed `RegistrationResult`. An `ApiErrorException` escaping instead would
+ * bypass that and surface as an unhandled error.
  */
 it('converts a Stripe API error into a failed result carrying the reason', function () {
     stripeCreateCustomerFakeApi(
@@ -224,7 +286,10 @@ it('converts a Stripe API error into a failed result carrying the reason', funct
         400,
     );
 
-    $result = stripeCreateCustomer(['email' => 'not-an-email'])->create();
+    // A valid email on our side; Stripe is the one rejecting it. `Email` refuses a malformed
+    // address at construction, so the invalid value cannot reach this call from here at all —
+    // which is the point of the value object and why the rejection has to be staged upstream.
+    $result = stripeCreateCustomer(['email' => 'buyer@example.com'])->create();
 
     expect($result->success)->toBeFalse()
         ->and($result->reference)->toBeNull()

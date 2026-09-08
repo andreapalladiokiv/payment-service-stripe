@@ -20,7 +20,7 @@ use Techork\PaymentService\Common\ValueObject\PaymentInitiation;
 use Techork\PaymentService\Common\ValueObject\Token;
 use Techork\PaymentService\Common\ValueObject\TokenId;
 use Techork\PaymentService\Gateway\Command\PlacementCommand;
-use Techork\PaymentService\Gateway\Contract\CustomerRepository;
+use Techork\PaymentService\Gateway\Contract\GatewayCustomerRepository;
 use Techork\PaymentService\Gateway\Contract\GatewayCredential;
 use Techork\PaymentService\Gateway\Contract\GatewayInstrumentRepository;
 use Techork\PaymentService\Gateway\Exception\UnsupportedInstrument;
@@ -37,7 +37,7 @@ function chargeStripeGateway(): StripeGateway
         Mockery::mock(GatewayCredential::class, ['getId' => GatewayId::generate()]),
         Mockery::mock(DecryptInterface::class),
         Mockery::mock(GatewayInstrumentRepository::class, ['find' => null]),
-        Mockery::mock(CustomerRepository::class, ['findByInstrument' => null]),
+        Mockery::mock(GatewayCustomerRepository::class, ['find' => null]),
         ['apiKey' => 'sk_test'],
     ));
 
@@ -106,7 +106,7 @@ function stripeChargeOperation(array $options): Charge
         $options['gateway'] ?? Mockery::mock(GatewayCredential::class, ['getId' => GatewayId::generate()]),
         $options['decrypter'] ?? Mockery::mock(DecryptInterface::class),
         $options['referenceResolver'] ?? Mockery::mock(GatewayInstrumentRepository::class, ['find' => null]),
-        $options['customerRepository'] ?? Mockery::mock(CustomerRepository::class, ['findByInstrument' => null]),
+        $options['customerRepository'] ?? Mockery::mock(GatewayCustomerRepository::class, ['find' => null]),
     );
 
     return new Charge($infrastructure, $options['settings'] ?? new StripeSettings, new PlacementCommand(
