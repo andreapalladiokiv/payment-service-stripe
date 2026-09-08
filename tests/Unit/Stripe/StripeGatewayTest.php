@@ -222,7 +222,6 @@ function stripeResolvedCustomerFor(StripeGateway $gateway, ArrayObject $sent, ar
         $options['customerRepository'] ?? Mockery::mock(GatewayCustomerRepository::class, ['find' => null]),
         ['apiKey' => 'sk_test_fake'],
     ));
-    $gateway->setCustomerRepository($options['customerRepository']);
 
     $command = new PlacementCommand(
         gatewayId: GatewayId::generate(),

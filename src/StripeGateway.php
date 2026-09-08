@@ -47,24 +47,16 @@ final class StripeGateway implements Gateway
 
     private ?string $returnUrl = null;
 
-    private ?GatewayCustomerRepository $customerRepository = null;
-
     #[Override]
     public function getName(): string
     {
         return 'stripe';
     }
 
-    public function setCustomerRepository(GatewayCustomerRepository $repository): void
-    {
-        $this->customerRepository = $repository;
-    }
-
     #[Override]
     public function configure(GatewayInfrastructure $infrastructure): void
     {
         $this->infrastructure = $infrastructure;
-        $this->customerRepository = $infrastructure->customers;
         $this->apiKey = $infrastructure->stringSetting('apiKey');
 
         // One value per deployment rather than per payment, which is what separates it from
@@ -236,7 +228,7 @@ final class StripeGateway implements Gateway
             return RegistrationResult::failed($created->message ?? 'Stripe createCustomer failed');
         }
 
-        $this->customerRepository?->saveReference(
+        $this->infrastructure()->customers->saveReference(
             $this->infrastructure()->credential->getId(),
             $command->customerId,
             $created->reference,
@@ -303,12 +295,12 @@ final class StripeGateway implements Gateway
      */
     private function resolveCustomerReference(?CustomerIdentifier $customerId, ?PaymentInstrument $instrument): ?string
     {
-        if ($this->customerRepository === null || $customerId === null) {
+        if ($customerId === null) {
             return $this->adoptCustomerFromStripe($customerId, $instrument);
         }
 
         $gatewayId = $this->infrastructure()->credential->getId();
-        $existing = $this->customerRepository->find($gatewayId, $customerId);
+        $existing = $this->infrastructure()->customers->find($gatewayId, $customerId);
 
         // `''` is checked here as well as normalised in the Eloquent implementation, because the
         // contract permits any implementation and this is the value that costs a payment: an
@@ -361,7 +353,7 @@ final class StripeGateway implements Gateway
         }
 
         if ($customerId !== null) {
-            $this->customerRepository?->saveReference($gatewayId, $customerId, $customerReference);
+            $this->infrastructure()->customers->saveReference($gatewayId, $customerId, $customerReference);
         }
 
         return $customerReference;
