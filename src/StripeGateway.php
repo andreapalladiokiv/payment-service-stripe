@@ -10,7 +10,6 @@ use Stripe\Exception\ApiErrorException;
 use Stripe\StripeClient;
 use Techork\PaymentService\Common\ValueObject\CustomerId;
 use Techork\PaymentService\Common\Contract\PaymentInstrument;
-use Techork\PaymentService\Common\ValueObject\AttachedPaymentMethod;
 use Techork\PaymentService\Common\ValueObject\Customer;
 use Techork\PaymentService\Common\ValueObject\PaymentMethod;
 use Techork\PaymentService\Gateway\Exception\UnsupportedOperation;
@@ -324,11 +323,9 @@ final class StripeGateway implements Gateway
      */
     private function adoptCustomerFromStripe(?CustomerId $customerId, ?PaymentInstrument $instrument): ?string
     {
-        // Either shape of stored card, because the question is about the `pm_xxx` and not about
-        // who holds it here: a payment arrives with an `AttachedPaymentMethod`, while the vaulting
-        // operations still hand over the bare one they are about to attach.
-        $instrument = $instrument instanceof AttachedPaymentMethod ? $instrument->paymentMethod : $instrument;
-
+        // Attached or not, because the question is about the `pm_xxx` and not about who holds it:
+        // a payment arrives with a claimed card and the vaulting operations with one they are
+        // about to claim, and both are the same class.
         if (! $instrument instanceof PaymentMethod) {
             return null;
         }

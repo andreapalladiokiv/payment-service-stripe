@@ -21,7 +21,6 @@ use Techork\PaymentService\Common\ValueObject\CreditCard\Holder;
 use Techork\PaymentService\Common\ValueObject\CreditCard\Number;
 use Techork\PaymentService\Common\ValueObject\Email;
 use Techork\PaymentService\Common\ValueObject\PaymentInitiation;
-use Techork\PaymentService\Common\ValueObject\AttachedPaymentMethod;
 use Techork\PaymentService\Common\ValueObject\PaymentMethod;
 use Techork\PaymentService\Common\ValueObject\PaymentMethodId;
 use Techork\PaymentService\Gateway\Command\IssueCardCommand;
@@ -188,14 +187,17 @@ function stripeBarePaymentMethod(): PaymentMethod
 }
 
 /**
- * The saved card with a customer attached — the only form a payment operation accepts.
+ * The saved card with a customer attached — the state a payment operation requires.
  *
  * Both fixtures are needed: this one for the payments, {@see stripeBarePaymentMethod()} for the
- * test that asserts the refusal.
+ * test that asserts the refusal. Attached is a state rather than a type, so the difference is one
+ * constructor argument.
  */
-function stripeSavedPaymentMethod(): AttachedPaymentMethod
+function stripeSavedPaymentMethod(): PaymentMethod
 {
-    return new AttachedPaymentMethod(stripeSuiteCustomer(), stripeBarePaymentMethod());
+    $bare = stripeBarePaymentMethod();
+
+    return new PaymentMethod($bare->id, $bare->instrument, stripeSuiteCustomer());
 }
 
 afterEach(function () {

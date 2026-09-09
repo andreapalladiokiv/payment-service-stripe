@@ -29,6 +29,8 @@ use Techork\PaymentService\Gateway\ValueObject\GatewayInfrastructure;
 use Techork\PaymentService\Stripe\Charge;
 use Techork\PaymentService\Stripe\StripeGateway;
 use Techork\PaymentService\Stripe\StripeSettings;
+use Techork\PaymentService\Common\ValueObject\PaymentMethod;
+use Techork\PaymentService\Common\ValueObject\PaymentMethodId;
 
 function chargeStripeGateway(): StripeGateway
 {
@@ -210,3 +212,22 @@ it('refuses cash as a wiring error rather than letting it degrade into a decline
  * read the attestation back out of omnipay's parameter bag, which no longer exists. What they
  * stood in for is asserted on the wire in ThreeDSIntegrationTest.
  */
+// ─────────────────────────────────────────────────────────
+//  A stored card charged to nobody
+//
+//  Attached is a STATE of a payment method rather than a second type, so "payable" is no longer
+//  something a signature carries — each payment mapper checks it. That is the trade the shape
+//  made, and this is its price: the refusal is asserted at every operation that makes it, because
+//  a check one mapper forgets is a card charged to whoever it happened to be billed to, which is
+//  the behaviour the customer split exists to end.
+// ─────────────────────────────────────────────────────────
+
+it('refuses to charge a stored card nobody has claimed', function () {
+    $bare = new PaymentMethod(PaymentMethodId::generate(), testCard());
+
+    expect(fn () => stripeChargeOperation([
+        'money' => new Money(1000, new Currency('USD')),
+        'instrument' => $bare,
+        'referenceResolver' => fakeReferenceResolver('pm_xyz789'),
+    ])->payload())->toThrow(UnsupportedInstrument::class, 'names no customer on the "charge" operation');
+});

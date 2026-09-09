@@ -15,7 +15,6 @@ use Techork\PaymentService\Common\ValueObject\CreditCard\Expiration;
 use Techork\PaymentService\Common\ValueObject\CreditCard\Holder;
 use Techork\PaymentService\Common\ValueObject\CreditCard\Number;
 use Techork\PaymentService\Common\ValueObject\PaymentInitiation;
-use Techork\PaymentService\Common\ValueObject\AttachedPaymentMethod;
 use Techork\PaymentService\Common\ValueObject\PaymentMethod;
 use Techork\PaymentService\Common\ValueObject\PaymentMethodId;
 use Techork\PaymentService\Gateway\Command\PlacementCommand;
@@ -82,9 +81,9 @@ afterEach(fn () => ApiRequestor::setHttpClient(new CurlClient));
  * A stored instrument, because the defect only shows on one: it is `payment_method` rather than
  * `payment_method_data` in the body that used to be read as "nobody is present".
  */
-function stripeOffSessionInstrument(): AttachedPaymentMethod
+function stripeOffSessionInstrument(): PaymentMethod
 {
-    return new AttachedPaymentMethod(stripeSuiteCustomer(), new PaymentMethod(
+    return new PaymentMethod(
         PaymentMethodId::generate(),
         new CreditCard(
             new Number('424242', '4242', CardBrand::Visa),
@@ -92,7 +91,8 @@ function stripeOffSessionInstrument(): AttachedPaymentMethod
             new Holder('Test'),
             new Cvc,
         ),
-    ));
+        stripeSuiteCustomer(),
+    );
 }
 
 /**

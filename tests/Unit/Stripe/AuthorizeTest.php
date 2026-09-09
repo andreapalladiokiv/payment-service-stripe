@@ -15,7 +15,6 @@ use Techork\PaymentService\Common\ValueObject\CreditCard\Holder;
 use Techork\PaymentService\Common\ValueObject\CreditCard\Number;
 use Techork\PaymentService\Common\ValueObject\ExpiresAt;
 use Techork\PaymentService\Common\ValueObject\PaymentInitiation;
-use Techork\PaymentService\Common\ValueObject\AttachedPaymentMethod;
 use Techork\PaymentService\Common\ValueObject\PaymentMethod;
 use Techork\PaymentService\Common\ValueObject\PaymentMethodId;
 use Techork\PaymentService\Common\ValueObject\Token;
@@ -181,10 +180,11 @@ it('builds authorize data for token', function () {
 });
 
 it('builds authorize data for payment method with pm_ reference', function () {
-    $pm = new AttachedPaymentMethod(stripeSuiteCustomer(), new PaymentMethod(
+    $pm = new PaymentMethod(
         PaymentMethodId::generate(),
         testCard(),
-    ));
+        stripeSuiteCustomer(),
+    );
 
     stripeAuthorizeFakeHttp(['id' => 'pm_x', 'object' => 'payment_method', 'customer' => null]);
 
@@ -201,10 +201,11 @@ it('builds authorize data for payment method with pm_ reference', function () {
 });
 
 it('builds authorize data for payment method with tok_ reference', function () {
-    $pm = new AttachedPaymentMethod(stripeSuiteCustomer(), new PaymentMethod(
+    $pm = new PaymentMethod(
         PaymentMethodId::generate(),
         testCard(),
-    ));
+        stripeSuiteCustomer(),
+    );
 
     stripeAuthorizeFakeHttp(['id' => 'pm_x', 'object' => 'payment_method', 'customer' => null]);
 
@@ -337,3 +338,22 @@ it('throws on cash instrument', function () {
  * What the round-trip was standing in for — that the attestation reaches Stripe — is asserted
  * directly in ThreeDSIntegrationTest, on the params the SDK puts on the wire.
  */
+// ─────────────────────────────────────────────────────────
+//  A stored card charged to nobody
+//
+//  Attached is a STATE of a payment method rather than a second type, so "payable" is no longer
+//  something a signature carries — each payment mapper checks it. That is the trade the shape
+//  made, and this is its price: the refusal is asserted at every operation that makes it, because
+//  a check one mapper forgets is a card charged to whoever it happened to be billed to, which is
+//  the behaviour the customer split exists to end.
+// ─────────────────────────────────────────────────────────
+
+it('refuses to authorize a stored card nobody has claimed', function () {
+    $bare = new PaymentMethod(PaymentMethodId::generate(), testCard());
+
+    expect(fn () => stripeAuthorizeOperation([
+        'money' => new Money(1000, new Currency('USD')),
+        'instrument' => $bare,
+        'referenceResolver' => fakeReferenceResolver('pm_xyz789'),
+    ])->payload())->toThrow(UnsupportedInstrument::class, 'names no customer on the "authorize" operation');
+});
