@@ -10,11 +10,11 @@ use Stripe\Exception\ApiErrorException;
 use Stripe\StripeClient;
 use Techork\PaymentService\Common\Contract\PaymentInstrument;
 use Techork\PaymentService\Common\Contract\PaymentInstrumentVisitor;
-use Techork\PaymentService\Common\ValueObject\BillingAddress;
 use Techork\PaymentService\Common\ValueObject\Cash;
 use Techork\PaymentService\Common\ValueObject\CreditCard;
 use Techork\PaymentService\Common\ValueObject\CreditCard\CheckResult;
 use Techork\PaymentService\Common\ValueObject\HostedPayment;
+use Techork\PaymentService\Common\ValueObject\AttachedPaymentMethod;
 use Techork\PaymentService\Common\ValueObject\PaymentMethod;
 use Techork\PaymentService\Common\ValueObject\Token;
 use Techork\PaymentService\Gateway\Command\VaultCommand;
@@ -57,9 +57,7 @@ final class RegisterPaymentMethod implements PaymentInstrumentVisitor
 
         $paymentMethodData = $instrument->accept($this);
 
-        /** @var ?BillingAddress $billingAddress */
-        $billingAddress = $this->command->billingAddress;
-        $billingDetails = $this->formatBillingDetails($billingAddress);
+        $billingDetails = $this->formatBillingDetails($this->command->customer);
         if ($billingDetails !== null && $billingDetails !== []) {
             $paymentMethodData['billing_details'] = $billingDetails;
         }
@@ -108,6 +106,17 @@ final class RegisterPaymentMethod implements PaymentInstrumentVisitor
 
     #[Override]
     public function visitPaymentMethod(PaymentMethod $paymentMethod): never
+    {
+        throw new RuntimeException('Cannot create a Stripe PaymentMethod from an existing PaymentMethod.');
+    }
+
+    /**
+     * An attached one is refused for the same reason as a bare one: this operation is what
+     * PRODUCES a stored instrument, so being handed one is a caller's mistake either way, and
+     * having a customer attached does not make a stored card re-storable.
+     */
+    #[Override]
+    public function visitAttachedPaymentMethod(AttachedPaymentMethod $attached): never
     {
         throw new RuntimeException('Cannot create a Stripe PaymentMethod from an existing PaymentMethod.');
     }

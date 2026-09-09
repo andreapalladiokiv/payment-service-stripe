@@ -10,6 +10,7 @@ use Stripe\HttpClient\CurlClient;
 use Techork\PaymentService\Common\Contract\DecryptInterface;
 use Techork\PaymentService\Common\Contract\EncryptInterface;
 use Techork\PaymentService\Common\ValueObject\BillingAddress;
+use Techork\PaymentService\Common\ValueObject\Customer;
 use Techork\PaymentService\Common\ValueObject\CardBrand;
 use Techork\PaymentService\Common\ValueObject\Challenge\SdkChallenge;
 use Techork\PaymentService\Common\ValueObject\Country;
@@ -18,13 +19,11 @@ use Techork\PaymentService\Common\ValueObject\CreditCard\Cvc;
 use Techork\PaymentService\Common\ValueObject\CreditCard\Expiration;
 use Techork\PaymentService\Common\ValueObject\CreditCard\Holder;
 use Techork\PaymentService\Common\ValueObject\CreditCard\Number;
-use Techork\PaymentService\Common\ValueObject\CustomerIdentity;
 use Techork\PaymentService\Common\ValueObject\Email;
 use Techork\PaymentService\Common\ValueObject\PaymentInitiation;
+use Techork\PaymentService\Common\ValueObject\AttachedPaymentMethod;
 use Techork\PaymentService\Common\ValueObject\PaymentMethod;
 use Techork\PaymentService\Common\ValueObject\PaymentMethodId;
-use Techork\PaymentService\Gateway\Command\CancelCommand;
-use Techork\PaymentService\Gateway\Command\CaptureCommand;
 use Techork\PaymentService\Gateway\Command\IssueCardCommand;
 use Techork\PaymentService\Gateway\Command\PlacementCommand;
 use Techork\PaymentService\Gateway\Command\RebillingCommand;
@@ -44,16 +43,13 @@ use Techork\PaymentService\Gateway\ValueObject\CardSpendCategory;
 use Techork\PaymentService\Gateway\ValueObject\GatewayId;
 use Techork\PaymentService\Gateway\ValueObject\GatewayInfrastructure;
 use Techork\PaymentService\Stripe\Authorize;
-use Techork\PaymentService\Stripe\Cancel;
 use Techork\PaymentService\Stripe\Capture;
 use Techork\PaymentService\Stripe\Charge;
-use Techork\PaymentService\Stripe\CreateCustomer;
 use Techork\PaymentService\Stripe\Refund;
 use Techork\PaymentService\Stripe\RegisterPaymentMethod;
 use Techork\PaymentService\Stripe\StripeGateway;
 use Techork\PaymentService\Stripe\StripeSettings;
 use Techork\PaymentService\Stripe\Tokenize;
-use Techork\PaymentService\Stripe\UpdateCustomer;
 
 function stripeGatewayInfrastructure(): GatewayInfrastructure
 {
@@ -178,7 +174,7 @@ function stripeUnownedCard(): CreditCard
     );
 }
 
-function stripeSavedPaymentMethod(): PaymentMethod
+function stripeBarePaymentMethod(): PaymentMethod
 {
     return new PaymentMethod(
         PaymentMethodId::generate(),
@@ -188,8 +184,18 @@ function stripeSavedPaymentMethod(): PaymentMethod
             new Holder('Test'),
             new Cvc,
         ),
-        new BillingAddress('Test', 'User', '1 St', 'NYC', new Country('US'), '10001'),
     );
+}
+
+/**
+ * The saved card with a customer attached — the only form a payment operation accepts.
+ *
+ * Both fixtures are needed: this one for the payments, {@see stripeBarePaymentMethod()} for the
+ * test that asserts the refusal.
+ */
+function stripeSavedPaymentMethod(): AttachedPaymentMethod
+{
+    return new AttachedPaymentMethod(stripeSuiteCustomer(), stripeBarePaymentMethod());
 }
 
 afterEach(function () {
@@ -227,10 +233,9 @@ function stripeResolvedCustomerFor(StripeGateway $gateway, ArrayObject $sent, ar
         gatewayId: GatewayId::generate(),
         instrument: $options['instrument'],
         amount: new Money(1000, new Currency('USD')),
-        billingAddress: $options['billingAddress'] ?? null,
         // Named on the command, which is the change: resolution used to start from the instrument
         // and had no way to be told who was paying.
-        customerId: array_key_exists('customerId', $options) ? $options['customerId'] : stripeSuiteCustomerId(),
+        customer: stripeSuiteCustomerFrom($options + ['customerId' => stripeSuiteCustomerId()]),
     );
 
     $gateway->charge($command);
@@ -333,10 +338,12 @@ it('refuses to register a payment method for nobody', function () {
         ['apiKey' => 'sk_test_fake'],
     ));
 
+    // No customer named, and no address to be mistaken for one: the address used to be the thing
+    // an unnamed registration got its person from, and there is nowhere to put one now without
+    // naming somebody.
     expect(fn () => $gateway->registerPaymentMethod(new VaultCommand(
         gatewayId: GatewayId::generate(),
         instrument: stripeUnownedCard(),
-        billingAddress: new BillingAddress('Test', 'User', '1 St', 'NYC', new Country('US'), '10001'),
     )))->toThrow(RegistrationNeedsCustomer::class);
 });
 
@@ -367,8 +374,7 @@ it('attaches a registered payment method to the customer it was named for', func
     $gateway->registerPaymentMethod(new VaultCommand(
         gatewayId: GatewayId::generate(),
         instrument: stripeUnownedCard(),
-        billingAddress: new BillingAddress('Test', 'User', '1 St', 'NYC', new Country('US'), '10001'),
-        customerId: stripeSuiteCustomerId(),
+        customer: stripeSuiteCustomer(address: new BillingAddress('1 St', 'NYC', new Country('US'), '10001')),
     ));
 
     expect(lastStripeRequestTo($sent, 'attach')['customer'] ?? null)->toBe('cus_named');
@@ -399,8 +405,7 @@ it('registers a customer from the identity it was handed and remembers the refer
 
     $result = $gateway->registerCustomer(new RegisterCustomerCommand(
         gatewayId: GatewayId::generate(),
-        customerId: stripeSuiteCustomerId(),
-        identity: new CustomerIdentity('Ada', 'Lovelace', new Email('ada@example.com')),
+        customer: stripeSuiteCustomer(firstName: 'Ada', lastName: 'Lovelace', email: new Email('ada@example.com')),
     ));
 
     expect($result->success)->toBeTrue()

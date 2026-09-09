@@ -43,8 +43,8 @@ function stripeTokenize(array $options): Tokenize
     return new Tokenize($infrastructure, $options['settings'] ?? new StripeSettings, new VaultCommand(
         gatewayId: GatewayId::generate(),
         instrument: $options['instrument'] ?? Mockery::mock(PaymentInstrument::class),
-        billingAddress: $options['billingAddress'] ?? null,
         clientUniqueId: $options['clientUniqueId'] ?? null,
+        customer: stripeSuiteCustomerFrom($options),
     ), $options['customerReference'] ?? null);
 }
 

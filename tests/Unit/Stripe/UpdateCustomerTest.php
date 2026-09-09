@@ -61,7 +61,11 @@ function stripeUpdateCustomer(array $options = []): UpdateCustomer
         new StripeSettings($options['apiKey'] ?? 'sk_test_fake'),
         $options['customerReference'] ?? '',
         $options['email'] ?? '',
-        $options['billingAddress'] ?? null,
+        // One customer where an address used to arrive alone. The `billingAddress` key stays
+        // because what each test says has not changed; where it lives has.
+        array_key_exists('customer', $options)
+            ? $options['customer']
+            : (isset($options['billingAddress']) ? stripeSuiteCustomer(address: $options['billingAddress']) : null),
     );
 }
 
@@ -79,8 +83,6 @@ function stripeUpdateCustomerAddress(array $keys): ?BillingAddress
     $country = new Country($keys['country'] ?? 'US');
 
     return new BillingAddress(
-        firstName: 'Test',
-        lastName: 'User',
         line: $keys['address'] ?? '',
         city: $keys['city'] ?? '',
         country: $country,

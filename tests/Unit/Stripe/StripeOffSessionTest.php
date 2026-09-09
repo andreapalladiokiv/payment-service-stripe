@@ -8,15 +8,14 @@ use Stripe\ApiRequestor;
 use Stripe\HttpClient\ClientInterface;
 use Stripe\HttpClient\CurlClient;
 use Techork\PaymentService\Common\Contract\DecryptInterface;
-use Techork\PaymentService\Common\ValueObject\BillingAddress;
 use Techork\PaymentService\Common\ValueObject\CardBrand;
-use Techork\PaymentService\Common\ValueObject\Country;
 use Techork\PaymentService\Common\ValueObject\CreditCard;
 use Techork\PaymentService\Common\ValueObject\CreditCard\Cvc;
 use Techork\PaymentService\Common\ValueObject\CreditCard\Expiration;
 use Techork\PaymentService\Common\ValueObject\CreditCard\Holder;
 use Techork\PaymentService\Common\ValueObject\CreditCard\Number;
 use Techork\PaymentService\Common\ValueObject\PaymentInitiation;
+use Techork\PaymentService\Common\ValueObject\AttachedPaymentMethod;
 use Techork\PaymentService\Common\ValueObject\PaymentMethod;
 use Techork\PaymentService\Common\ValueObject\PaymentMethodId;
 use Techork\PaymentService\Gateway\Command\PlacementCommand;
@@ -83,9 +82,9 @@ afterEach(fn () => ApiRequestor::setHttpClient(new CurlClient));
  * A stored instrument, because the defect only shows on one: it is `payment_method` rather than
  * `payment_method_data` in the body that used to be read as "nobody is present".
  */
-function stripeOffSessionInstrument(): PaymentMethod
+function stripeOffSessionInstrument(): AttachedPaymentMethod
 {
-    return new PaymentMethod(
+    return new AttachedPaymentMethod(stripeSuiteCustomer(), new PaymentMethod(
         PaymentMethodId::generate(),
         new CreditCard(
             new Number('424242', '4242', CardBrand::Visa),
@@ -93,8 +92,7 @@ function stripeOffSessionInstrument(): PaymentMethod
             new Holder('Test'),
             new Cvc,
         ),
-        new BillingAddress('Test', 'User', '1 St', 'NYC', new Country('US'), '10001'),
-    );
+    ));
 }
 
 /**

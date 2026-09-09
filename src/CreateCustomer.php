@@ -6,8 +6,7 @@ namespace Techork\PaymentService\Stripe;
 
 use Stripe\Exception\ApiErrorException;
 use Stripe\StripeClient;
-use Techork\PaymentService\Common\ValueObject\BillingAddress;
-use Techork\PaymentService\Common\ValueObject\CustomerIdentity;
+use Techork\PaymentService\Common\ValueObject\Customer;
 use Techork\PaymentService\Gateway\Contract\GatewayResult;
 use Techork\PaymentService\Stripe\Concern\StripeRequestParameters;
 
@@ -16,11 +15,12 @@ use Techork\PaymentService\Stripe\Concern\StripeRequestParameters;
  *
  * Reached only from {@see StripeGateway::registerCustomer()}, which is now the one operation
  * that creates one. It used to be reached from resolution as well, on every payment, with an
- * identity assembled out of whatever `BillingAddress` had ridden along — so a charge could mint a
- * person. The identity is passed in now, by the caller that holds the customer.
+ * identity assembled out of whatever billing address had ridden along — so a charge could mint a
+ * person. The {@see Customer} is passed in now, by the caller that holds it.
  *
- * `$identity` supplies the person and `$billingAddress` supplies the address. They are separate
- * arguments and not one, because the two answer different questions and Stripe stores both.
+ * The person and the address stay distinct inside it, because the two answer different questions
+ * and Stripe stores both. What they are no longer is separately omissible: they were two optional
+ * arguments here, and either being absent is how a customer got assembled out of fragments.
  */
 final class CreateCustomer
 {
@@ -28,8 +28,7 @@ final class CreateCustomer
 
     public function __construct(
         private readonly StripeSettings $settings,
-        private readonly ?CustomerIdentity $identity = null,
-        private readonly ?BillingAddress $billingAddress = null,
+        private readonly Customer $customer,
     ) {}
 
     /**
@@ -37,24 +36,16 @@ final class CreateCustomer
      */
     public function payload(): array
     {
-        // Read off the billing address rather than five discrete keys. Those keys had no
-        // setters, so omnipay dropped every one of them and this operation created customers
-        // carrying an email and nothing else — while the caller was already handing over a
-        // whole BillingAddress that had nowhere to land.
-        $address = $this->billingAddress;
-        $identity = $this->identity;
-
-        // The identity answers first and the address is the fallback, which is the same order
-        // every provider here now reads them in: the address is where the payer's name and email
-        // used to be kept, one copy per card, so it is still the honest answer when nobody has
-        // been named — and it stops being consulted the moment somebody has.
-        $email = (string) ($identity?->email ?? $address?->email ?? '');
-        $name = trim(($identity->firstName ?? $address?->firstName ?? '').' '.($identity->lastName ?? $address?->lastName ?? ''));
+        // Read off the customer rather than five discrete keys. Those keys had no setters, so
+        // omnipay dropped every one of them and this operation created customers carrying an
+        // email and nothing else — while the caller was already handing over the address and the
+        // name, which had nowhere to land.
+        $identity = $this->customer->identity;
 
         return array_filter([
-            'name' => $name,
-            'email' => $email,
-            'address' => $this->formatCustomerAddress($address),
+            'name' => trim($identity->firstName.' '.$identity->lastName),
+            'email' => (string) $identity->email,
+            'address' => $this->formatCustomerAddress($this->customer->billingAddress),
         ]);
     }
 

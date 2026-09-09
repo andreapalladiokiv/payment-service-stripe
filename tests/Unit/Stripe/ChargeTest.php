@@ -114,11 +114,11 @@ function stripeChargeOperation(array $options): Charge
         instrument: $options['instrument'] ?? Mockery::mock(PaymentInstrument::class),
         amount: $options['money'] ?? new Money(1000, new Currency('USD')),
         clientUniqueId: $options['clientUniqueId'] ?? null,
-        billingAddress: $options['billingAddress'] ?? null,
         threeDS: $options['threeDS'] ?? null,
         statementDescription: $options['statementDescription'] ?? null,
         description: $options['description'] ?? null,
         initiation: $options['initiation'] ?? PaymentInitiation::CardholderInitiated,
+        customer: stripeSuiteCustomerFrom($options),
     ), $options['customerReference'] ?? null);
 }
 

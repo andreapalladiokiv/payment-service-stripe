@@ -12,6 +12,7 @@ use Techork\PaymentService\Common\Contract\PaymentInstrumentVisitor;
 use Techork\PaymentService\Common\ValueObject\Cash;
 use Techork\PaymentService\Common\ValueObject\CreditCard;
 use Techork\PaymentService\Common\ValueObject\HostedPayment;
+use Techork\PaymentService\Common\ValueObject\AttachedPaymentMethod;
 use Techork\PaymentService\Common\ValueObject\PaymentMethod;
 use Techork\PaymentService\Common\ValueObject\Token;
 use Techork\PaymentService\Gateway\Exception\UnsupportedInstrument;
@@ -93,6 +94,17 @@ final class Tokenize implements PaymentInstrumentVisitor
 
     #[Override]
     public function visitPaymentMethod(PaymentMethod $paymentMethod): never
+    {
+        throw new RuntimeException('PaymentMethod does not support tokenization.');
+    }
+
+    /**
+     * An attached one is refused for the same reason as a bare one: this operation is what
+     * PRODUCES a stored instrument, so being handed one is a caller's mistake either way, and
+     * having a customer attached does not make a stored card re-storable.
+     */
+    #[Override]
+    public function visitAttachedPaymentMethod(AttachedPaymentMethod $attached): never
     {
         throw new RuntimeException('PaymentMethod does not support tokenization.');
     }

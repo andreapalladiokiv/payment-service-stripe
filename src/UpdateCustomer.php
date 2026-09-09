@@ -6,7 +6,7 @@ namespace Techork\PaymentService\Stripe;
 
 use Stripe\Exception\ApiErrorException;
 use Stripe\StripeClient;
-use Techork\PaymentService\Common\ValueObject\BillingAddress;
+use Techork\PaymentService\Common\ValueObject\Customer;
 use Techork\PaymentService\Gateway\Contract\GatewayResult;
 use Techork\PaymentService\Stripe\Concern\StripeRequestParameters;
 
@@ -25,7 +25,7 @@ final class UpdateCustomer
         private readonly StripeSettings $settings,
         public readonly string $customerReference = '',
         private readonly string $email = '',
-        private readonly ?BillingAddress $billingAddress = null,
+        private readonly ?Customer $customer = null,
     ) {}
 
     /**
@@ -35,11 +35,12 @@ final class UpdateCustomer
     {
         // Same unreachable keys as CreateCustomer had, with the same consequence:
         // this used to build [] always, and the operation could only ever send an empty update.
-        $address = $this->billingAddress;
-
+        //
+        // The explicit `$email` still wins over the customer's, because that is the argument's
+        // whole purpose: correcting an email at Stripe without restating who the person is.
         return array_filter([
-            'email' => $this->email !== '' ? $this->email : (string) ($address?->email ?? ''),
-            'address' => $this->formatCustomerAddress($address),
+            'email' => $this->email !== '' ? $this->email : (string) ($this->customer?->identity->email ?? ''),
+            'address' => $this->formatCustomerAddress($this->customer?->billingAddress),
         ]);
     }
 

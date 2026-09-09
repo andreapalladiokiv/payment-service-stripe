@@ -6,6 +6,7 @@ use Stripe\ApiRequestor;
 use Stripe\HttpClient\ClientInterface;
 use Stripe\HttpClient\CurlClient;
 use Techork\PaymentService\Common\ValueObject\BillingAddress;
+use Techork\PaymentService\Common\ValueObject\Customer;
 use Techork\PaymentService\Common\ValueObject\Country;
 use Techork\PaymentService\Common\ValueObject\CustomerIdentity;
 use Techork\PaymentService\Common\ValueObject\Email;
@@ -52,12 +53,20 @@ function stripeCreateCustomerFakeApi(array $body, int $status = 200): object
 
 function stripeCreateCustomer(array $parameters = []): CreateCustomer
 {
+    /** @var ?CustomerIdentity $identity */
+    $identity = $parameters['identity'] ?? (isset($parameters['email'])
+        ? new CustomerIdentity('Test', 'User', new Email($parameters['email']))
+        : null);
+
     return new CreateCustomer(
         new StripeSettings($parameters['apiKey'] ?? 'sk_test_fake'),
-        $parameters['identity'] ?? (isset($parameters['email'])
-            ? new CustomerIdentity('Test', 'User', new Email($parameters['email']))
-            : null),
-        $parameters['billingAddress'] ?? null,
+        stripeSuiteCustomer(
+            firstName: $identity->firstName ?? 'Test',
+            lastName: $identity->lastName ?? 'User',
+            email: $identity->email ?? null,
+            phone: $identity->phone ?? null,
+            address: $parameters['billingAddress'] ?? BillingAddress::unknown(),
+        ),
     );
 }
 
@@ -79,8 +88,6 @@ function stripeCreateCustomerAddress(array $keys): ?BillingAddress
     $country = new Country($keys['country'] ?? 'US');
 
     return new BillingAddress(
-        firstName: 'Test',
-        lastName: 'User',
         line: $keys['address'] ?? '',
         city: $keys['city'] ?? '',
         country: $country,
@@ -158,18 +165,15 @@ it('keeps the known address parts and drops the unknown ones', function () {
     expect($data['address'])->toBe(['city' => 'Berlin', 'country' => 'DE']);
 });
 
-/**
- * Nothing known about the person produces an empty payload, and Stripe creates a customer from
- * it anyway — `customers.create` requires no field at all, which is why the email gate that used
- * to guard this call was removable.
+/*
+ * `it('produces an empty payload when nothing at all is known about the person')` lived here.
  *
- * Reachable only from a host calling {@see \Techork\PaymentService\Stripe\StripeGateway::createCustomer()}
- * with nothing: the routed operation refuses an unnamed customer before it gets here, and the
- * identity it passes always carries a name.
+ * It pinned that `customers.create` takes no field at all — which is why the email gate that used
+ * to guard this call was removable — by handing the operation nothing. There is no "nothing" to
+ * hand it: a `Customer` has an id, a name and an address or does not exist, so the smallest
+ * payload this can produce is a name. The fact about Stripe still holds and is now only reachable
+ * by asking Stripe; the shape that demonstrated it is not.
  */
-it('produces an empty payload when nothing at all is known about the person', function () {
-    expect(stripeCreateCustomer()->payload())->toBe([]);
-});
 
 /**
  * The identity answers and the address is the fallback — the same order every provider here now
@@ -185,13 +189,10 @@ it('takes the person from the identity and the address from the address', functi
     $data = stripeCreateCustomer([
         'identity' => new CustomerIdentity('Ada', 'Lovelace', new Email('ada@example.com')),
         'billingAddress' => new BillingAddress(
-            firstName: 'Whoever',
-            lastName: 'Paid',
             line: '1 Market Street',
             city: 'Miami',
             country: new Country('US'),
             postalCode: '33101',
-            email: new Email('whoever@example.com'),
         ),
     ])->payload();
 
@@ -207,27 +208,14 @@ it('takes the person from the identity and the address from the address', functi
         ]);
 });
 
-/**
- * With nobody named, the address still answers. It is the honest reading of what we have — the
- * address is where the payer's name and email have been kept all along — and it is what keeps a
- * host that has not adopted customers yet working exactly as it did.
+/*
+ * A third test lived here: `it('falls back to the address when no identity was passed')`.
+ *
+ * It pinned the reading that made the address answer for the payer when no identity was supplied
+ * — the honest thing to do while the name and email were properties of the address. There is no
+ * such fallback and no such case: a `Customer` has an identity or does not exist, so "no identity
+ * was passed" is not expressible. The behaviour it described is what the whole split removes.
  */
-it('falls back to the address when no identity was passed', function () {
-    $data = stripeCreateCustomer([
-        'billingAddress' => new BillingAddress(
-            firstName: 'Whoever',
-            lastName: 'Paid',
-            line: '1 Market Street',
-            city: 'Miami',
-            country: new Country('US'),
-            postalCode: '33101',
-            email: new Email('whoever@example.com'),
-        ),
-    ])->payload();
-
-    expect($data['name'])->toBe('Whoever Paid')
-        ->and($data['email'])->toBe('whoever@example.com');
-});
 
 /*
  * Two tests lived here and describe a class that no longer exists.

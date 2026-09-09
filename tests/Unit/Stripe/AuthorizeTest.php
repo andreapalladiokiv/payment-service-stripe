@@ -7,9 +7,7 @@ use Money\Money;
 use Techork\PaymentService\Common\Contract\DecryptInterface;
 use Techork\PaymentService\Common\Contract\EncryptInterface;
 use Techork\PaymentService\Common\Contract\PaymentInstrument;
-use Techork\PaymentService\Common\ValueObject\BillingAddress;
 use Techork\PaymentService\Common\ValueObject\Cash;
-use Techork\PaymentService\Common\ValueObject\Country;
 use Techork\PaymentService\Common\ValueObject\CreditCard;
 use Techork\PaymentService\Common\ValueObject\CreditCard\Cvc;
 use Techork\PaymentService\Common\ValueObject\CreditCard\Expiration;
@@ -17,6 +15,7 @@ use Techork\PaymentService\Common\ValueObject\CreditCard\Holder;
 use Techork\PaymentService\Common\ValueObject\CreditCard\Number;
 use Techork\PaymentService\Common\ValueObject\ExpiresAt;
 use Techork\PaymentService\Common\ValueObject\PaymentInitiation;
+use Techork\PaymentService\Common\ValueObject\AttachedPaymentMethod;
 use Techork\PaymentService\Common\ValueObject\PaymentMethod;
 use Techork\PaymentService\Common\ValueObject\PaymentMethodId;
 use Techork\PaymentService\Common\ValueObject\Token;
@@ -135,11 +134,11 @@ function stripeAuthorizeOperation(array $options): Authorize
         instrument: $options['instrument'] ?? Mockery::mock(PaymentInstrument::class),
         amount: $options['money'] ?? new Money(1000, new Currency('USD')),
         clientUniqueId: $options['clientUniqueId'] ?? null,
-        billingAddress: $options['billingAddress'] ?? null,
         threeDS: $options['threeDS'] ?? null,
         statementDescription: $options['statementDescription'] ?? null,
         description: $options['description'] ?? null,
         initiation: $options['initiation'] ?? PaymentInitiation::CardholderInitiated,
+        customer: stripeSuiteCustomerFrom($options),
     ), $options['customerReference'] ?? null);
 }
 
@@ -182,11 +181,10 @@ it('builds authorize data for token', function () {
 });
 
 it('builds authorize data for payment method with pm_ reference', function () {
-    $pm = new PaymentMethod(
+    $pm = new AttachedPaymentMethod(stripeSuiteCustomer(), new PaymentMethod(
         PaymentMethodId::generate(),
         testCard(),
-        new BillingAddress('Test', 'User', '1 St', 'NYC', new Country('US'), '10001'),
-    );
+    ));
 
     stripeAuthorizeFakeHttp(['id' => 'pm_x', 'object' => 'payment_method', 'customer' => null]);
 
@@ -203,11 +201,10 @@ it('builds authorize data for payment method with pm_ reference', function () {
 });
 
 it('builds authorize data for payment method with tok_ reference', function () {
-    $pm = new PaymentMethod(
+    $pm = new AttachedPaymentMethod(stripeSuiteCustomer(), new PaymentMethod(
         PaymentMethodId::generate(),
         testCard(),
-        new BillingAddress('Test', 'User', '1 St', 'NYC', new Country('US'), '10001'),
-    );
+    ));
 
     stripeAuthorizeFakeHttp(['id' => 'pm_x', 'object' => 'payment_method', 'customer' => null]);
 
@@ -253,7 +250,7 @@ it('includes the reference the gateway looked up for the named customer', functi
         // resolve, so a payment by someone we know used to reach Stripe as anonymous.
         instrument: testCard(),
         amount: new Money(5000, new Currency('USD')),
-        customerId: stripeSuiteCustomerId(),
+        customer: stripeSuiteCustomer(),
     ));
 
     // Through the intent Stripe received: the resolved reference is a constructor argument on the

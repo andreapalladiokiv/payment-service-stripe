@@ -8,17 +8,13 @@ use Override;
 use RuntimeException;
 use Stripe\Exception\ApiErrorException;
 use Stripe\StripeClient;
-use Techork\PaymentService\Common\Contract\CustomerIdentifier;
+use Techork\PaymentService\Common\ValueObject\CustomerId;
 use Techork\PaymentService\Common\Contract\PaymentInstrument;
-use Techork\PaymentService\Common\ValueObject\BillingAddress;
-use Techork\PaymentService\Common\ValueObject\CustomerIdentity;
+use Techork\PaymentService\Common\ValueObject\AttachedPaymentMethod;
+use Techork\PaymentService\Common\ValueObject\Customer;
 use Techork\PaymentService\Common\ValueObject\PaymentMethod;
-use Techork\PaymentService\Gateway\Contract\GatewayCustomerRepository;
 use Techork\PaymentService\Gateway\Exception\UnsupportedOperation;
 use Techork\PaymentService\Gateway\Contract\Gateway;
-use Techork\PaymentService\Gateway\Contract\GatewayCredential;
-use Techork\PaymentService\Gateway\Contract\GatewayInstrumentRepository;
-use Techork\PaymentService\Gateway\ValueObject\GatewayId;
 use Techork\PaymentService\Gateway\Command\CaptureCommand;
 use Techork\PaymentService\Gateway\Concern\HoldsInfrastructure;
 use Techork\PaymentService\Gateway\ValueObject\GatewayInfrastructure;
@@ -81,14 +77,14 @@ final class StripeGateway implements Gateway
      * It used to take a bare email and an address, and it used to be reached from resolution on
      * every payment. Both are why a charge could invent a person.
      */
-    public function createCustomer(?CustomerIdentity $identity = null, ?BillingAddress $billingAddress = null): GatewayResult
+    public function createCustomer(Customer $customer): GatewayResult
     {
-        return new CreateCustomer($this->settings(), $identity, $billingAddress)->create();
+        return new CreateCustomer($this->settings(), $customer)->create();
     }
 
-    public function updateCustomer(string $customerReference = '', string $email = '', ?BillingAddress $billingAddress = null): GatewayResult
+    public function updateCustomer(string $customerReference = '', string $email = '', ?Customer $customer = null): GatewayResult
     {
-        return new UpdateCustomer($this->settings(), $customerReference, $email, $billingAddress)->update();
+        return new UpdateCustomer($this->settings(), $customerReference, $email, $customer)->update();
     }
 
     public function getAuthenticationUrl(): ?string
@@ -105,7 +101,7 @@ final class StripeGateway implements Gateway
             $this->infrastructure(),
             $this->settings(),
             $command,
-            $this->resolveCustomerReference($command->customerId, $command->instrument),
+            $this->resolveCustomerReference($command->customer?->id, $command->instrument),
         )->tokenize();
     }
 
@@ -119,13 +115,13 @@ final class StripeGateway implements Gateway
     #[Override]
     public function registerPaymentMethod(VaultCommand $command): RegistrationResult
     {
-        $command->customerId ?? throw RegistrationNeedsCustomer::forGateway('stripe');
+        $customer = $command->customer ?? throw RegistrationNeedsCustomer::forGateway('stripe');
 
         return new RegisterPaymentMethod(
             $this->infrastructure(),
             $this->settings(),
             $command,
-            $this->resolveCustomerReference($command->customerId, $command->instrument),
+            $this->resolveCustomerReference($customer->id, $command->instrument),
         )->register();
     }
 
@@ -136,7 +132,7 @@ final class StripeGateway implements Gateway
             $this->infrastructure(),
             $this->settings(),
             $command,
-            $this->resolveCustomerReference($command->customerId, $command->instrument),
+            $this->resolveCustomerReference($command->customer?->id, $command->instrument),
         )->charge();
     }
 
@@ -147,7 +143,7 @@ final class StripeGateway implements Gateway
             $this->infrastructure(),
             $this->settings(),
             $command,
-            $this->resolveCustomerReference($command->customerId, $command->instrument),
+            $this->resolveCustomerReference($command->customer?->id, $command->instrument),
         )->authorize();
     }
 
@@ -164,7 +160,7 @@ final class StripeGateway implements Gateway
             $this->infrastructure(),
             $this->settings(),
             $command->toPlacement(),
-            $this->resolveCustomerReference($command->customerId, $command->instrument),
+            $this->resolveCustomerReference($command->customer?->id, $command->instrument),
         )->authorize();
     }
 
@@ -209,7 +205,7 @@ final class StripeGateway implements Gateway
     }
 
     /**
-     * Hold a Customer for one of ours, from the identity and nothing else.
+     * Hold a Customer for one of ours, from the customer and nothing else — no card.
      *
      * Stripe qualifies for this role because `customers.create` requires no field at all — the
      * email gate that used to gate it was removable for that reason — so an identity is enough
@@ -222,7 +218,7 @@ final class StripeGateway implements Gateway
     #[Override]
     public function registerCustomer(RegisterCustomerCommand $command): RegistrationResult
     {
-        $created = $this->createCustomer($command->identity, $command->billingAddress);
+        $created = $this->createCustomer($command->customer);
 
         if (! $created->success || $created->reference === null) {
             return RegistrationResult::failed($created->message ?? 'Stripe createCustomer failed');
@@ -230,7 +226,7 @@ final class StripeGateway implements Gateway
 
         $this->infrastructure()->customers->saveReference(
             $this->infrastructure()->credential->getId(),
-            $command->customerId,
+            $command->customer->id,
             $created->reference,
         );
 
@@ -277,7 +273,7 @@ final class StripeGateway implements Gateway
      * What it replaced was forty lines whose only job was to recover an identity nobody had ever
      * assigned — look the customer up by *instrument*, failing that retrieve the PaymentMethod
      * from Stripe and adopt whoever owned it, failing that build a Customer out of whatever
-     * `BillingAddress` had ridden along with the payment. The last branch is the one that mattered
+     * billing address had ridden along with the payment. The last branch is the one that mattered
      * most and it is gone: `resolveCustomerReference()` was lookup-**or-create** and hung on
      * `charge` and `authorize` as well as on the registration, so taking a payment could mint a
      * Customer that cannot possibly own the instrument being charged. An attached PaymentMethod
@@ -293,7 +289,7 @@ final class StripeGateway implements Gateway
      * makes the requests silently drop the `customer` param — Stripe then rejects the charge with
      * "Please include the customer".
      */
-    private function resolveCustomerReference(?CustomerIdentifier $customerId, ?PaymentInstrument $instrument): ?string
+    private function resolveCustomerReference(?CustomerId $customerId, ?PaymentInstrument $instrument): ?string
     {
         if ($customerId === null) {
             return $this->adoptCustomerFromStripe($customerId, $instrument);
@@ -326,8 +322,13 @@ final class StripeGateway implements Gateway
      * customer of our own to write it against; recovered without one, the reference is used for
      * this payment and remembered nowhere.
      */
-    private function adoptCustomerFromStripe(?CustomerIdentifier $customerId, ?PaymentInstrument $instrument): ?string
+    private function adoptCustomerFromStripe(?CustomerId $customerId, ?PaymentInstrument $instrument): ?string
     {
+        // Either shape of stored card, because the question is about the `pm_xxx` and not about
+        // who holds it here: a payment arrives with an `AttachedPaymentMethod`, while the vaulting
+        // operations still hand over the bare one they are about to attach.
+        $instrument = $instrument instanceof AttachedPaymentMethod ? $instrument->paymentMethod : $instrument;
+
         if (! $instrument instanceof PaymentMethod) {
             return null;
         }

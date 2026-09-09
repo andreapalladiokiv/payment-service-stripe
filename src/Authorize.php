@@ -14,6 +14,7 @@ use Techork\PaymentService\Common\Contract\PaymentInstrumentVisitor;
 use Techork\PaymentService\Common\ValueObject\Cash;
 use Techork\PaymentService\Common\ValueObject\CreditCard;
 use Techork\PaymentService\Common\ValueObject\HostedPayment;
+use Techork\PaymentService\Common\ValueObject\AttachedPaymentMethod;
 use Techork\PaymentService\Common\ValueObject\PaymentMethod;
 use Techork\PaymentService\Common\ValueObject\Token;
 use Techork\PaymentService\Gateway\Command\PlacementCommand;
@@ -89,8 +90,7 @@ final class Authorize implements PaymentInstrumentVisitor
             $data['description'] = $description;
         }
 
-        $billingAddress = $this->command->billingAddress;
-        $billingDetails = $this->formatBillingDetails($billingAddress);
+        $billingDetails = $this->formatBillingDetails($this->command->customer);
         if ($billingDetails !== null && isset($data['payment_method_data'])) {
             $data['payment_method_data']['billing_details'] = $billingDetails;
         }
@@ -135,13 +135,27 @@ final class Authorize implements PaymentInstrumentVisitor
         ];
     }
 
+    /**
+     * Refused: a stored card is charged to somebody, and a bare payment method names nobody.
+     *
+     * What this used to do is now {@see visitAttachedPaymentMethod()}, unchanged apart from
+     * reaching the instrument through the customer that holds it. The refusal is the change:
+     * the payer used to come off the address the payment method carried, so a card was charged
+     * to whoever it happened to be billed to.
+     */
     #[Override]
-    public function visitPaymentMethod(PaymentMethod $paymentMethod): array
+    public function visitPaymentMethod(PaymentMethod $paymentMethod): never
+    {
+        throw UnsupportedInstrument::needsAttachedCustomer('stripe', 'authorize', $paymentMethod);
+    }
+
+    #[Override]
+    public function visitAttachedPaymentMethod(AttachedPaymentMethod $attached): array
     {
         /** @var GatewayCredential $gateway */
         $gateway = $this->infrastructure->credential;
-        $reference = $this->infrastructure->instruments->find($gateway->getId(), $paymentMethod)
-            ?? throw new RuntimeException("No Stripe reference found for payment method $paymentMethod->id.");
+        $reference = $this->infrastructure->instruments->find($gateway->getId(), $attached->paymentMethod)
+            ?? throw new RuntimeException("No Stripe reference found for payment method {$attached->paymentMethod->id}.");
 
         return [
             'payment_method' => $reference,

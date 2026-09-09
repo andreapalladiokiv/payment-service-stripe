@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Techork\PaymentService\Stripe\Concern;
 
 use Techork\PaymentService\Common\ValueObject\BillingAddress;
+use Techork\PaymentService\Common\ValueObject\Customer;
 
 /**
  * Shaping our value objects into the blocks Stripe's API expects.
@@ -33,7 +34,11 @@ trait StripeRequestParameters
      */
     protected function formatCustomerAddress(?BillingAddress $address): ?array
     {
-        if ($address === null) {
+        // The marker counts as absent, which is the whole reason it exists. A `Customer` always
+        // has an address now, so `null` no longer reaches here from a caller that simply has no
+        // address to give — it says so with `BillingAddress::unknown()` instead, and sending that
+        // would blank a real address on the Stripe record with `ZZ` and a stub.
+        if ($address === null || $address->isUnknown()) {
             return null;
         }
 
@@ -50,26 +55,32 @@ trait StripeRequestParameters
      * The `billing_details` block of a payment method: who the card belongs to and where they are.
      * What the issuer runs AVS and the postal-code check against.
      *
+     * A whole {@see Customer}, because the block genuinely is both halves — `name`, `email` and
+     * `phone` beside an `address` — and the person half used to be read off the
+     * {@see BillingAddress}, which is what made the address stand in for the payer.
+     *
      * @return array<string, mixed>|null
      */
-    protected function formatBillingDetails(?BillingAddress $address): ?array
+    protected function formatBillingDetails(?Customer $customer): ?array
     {
-        if ($address === null) {
+        if ($customer === null) {
             return null;
         }
 
-        $name = trim($address->firstName.' '.$address->lastName);
+        $identity = $customer->identity;
+        $address = $customer->billingAddress;
 
-        $address1 = $address->line;
-        $address2 = $address->lineExtra !== '' ? $address->lineExtra : null;
+        // Stripe wants one name string; we hold two fields, because a provider that asks for them
+        // separately (Nuvei does) cannot be served from a joined one.
+        $name = trim($identity->firstName.' '.$identity->lastName);
 
         return array_filter([
             'name' => $name !== '' ? $name : null,
-            'email' => $address->email ? (string) $address->email : null,
-            'phone' => $address->phone ? (string) $address->phone : null,
+            'email' => $identity->email ? (string) $identity->email : null,
+            'phone' => $identity->phone ? (string) $identity->phone : null,
             'address' => array_filter([
-                'line1' => $address1,
-                'line2' => $address2,
+                'line1' => $address->line,
+                'line2' => $address->lineExtra !== '' ? $address->lineExtra : null,
                 'city' => $address->city,
                 'state' => $address->state ? (string) $address->state : null,
                 'postal_code' => $address->postalCode,

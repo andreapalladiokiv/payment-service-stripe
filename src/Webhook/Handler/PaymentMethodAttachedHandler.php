@@ -12,6 +12,7 @@ use Techork\PaymentService\Gateway\Webhook\Recorder\RecorderOutcome;
 use Stripe\Event;
 use Techork\PaymentService\Common\ShreddingStubs;
 use Techork\PaymentService\Common\ValueObject\BillingAddress;
+use Techork\PaymentService\Common\ValueObject\CustomerIdentity;
 use Techork\PaymentService\Common\ValueObject\CardBrand;
 use Techork\PaymentService\Common\ValueObject\Country;
 use Techork\PaymentService\Common\ValueObject\CreditCard;
@@ -57,7 +58,9 @@ final readonly class PaymentMethodAttachedHandler implements WebhookEventHandler
             return HandlerOutcome::Skipped;
         }
 
-        $billingAddress = $this->extractBillingAddress($paymentMethod->billing_details ?? null);
+        $billingDetails = $paymentMethod->billing_details ?? null;
+        $billingAddress = $this->extractBillingAddress($billingDetails);
+        $identity = $this->extractIdentity($billingDetails);
 
         $expMonth = (int) ($card->exp_month ?? 0);
         $expYear = (int) ($card->exp_year ?? 0);
@@ -88,6 +91,7 @@ final readonly class PaymentMethodAttachedHandler implements WebhookEventHandler
             paymentMethodReference: $paymentMethodReference,
             creditCard: $creditCard,
             billingAddress: $billingAddress,
+            identity: $identity,
         )) {
             RecorderOutcome::Applied => HandlerOutcome::Processed,
             RecorderOutcome::Skipped => HandlerOutcome::Skipped,
@@ -110,21 +114,33 @@ final readonly class PaymentMethodAttachedHandler implements WebhookEventHandler
         $city = (string) ($address->city ?? '');
         $country = (string) ($address->country ?? '');
         $postalCode = (string) ($address->postal_code ?? '');
-
         $state = (string) ($address->state ?? '');
-        $email = (string) ($details->email ?? '');
-        $fullName = trim((string) ($details->name ?? ''));
-        [$firstName, $lastName] = self::splitName($fullName);
 
         return new BillingAddress(
-            firstName: $firstName,
-            lastName: $lastName,
             line: $line !== '' ? $line : ShreddingStubs::ADDRESS_LINE,
             city: $city !== '' ? $city : ShreddingStubs::CITY,
             country: new Country($country !== '' ? $country : ShreddingStubs::COUNTRY),
             postalCode: $postalCode !== '' ? $postalCode : ShreddingStubs::POSTAL_CODE,
             lineExtra: (string) ($address->line2 ?? ''),
             state: $state !== '' ? new State($state) : null,
+        );
+    }
+
+    /**
+     * The person `billing_details` names, which is the other half of what
+     * {@see extractBillingAddress()} used to return on its own.
+     *
+     * Stripe sends one `name` and we hold two fields, so it is split — see {@see splitName()}
+     * for what that costs.
+     */
+    private function extractIdentity(?object $details): CustomerIdentity
+    {
+        $email = (string) ($details->email ?? '');
+        [$firstName, $lastName] = self::splitName(trim((string) ($details->name ?? '')));
+
+        return new CustomerIdentity(
+            firstName: $firstName,
+            lastName: $lastName,
             email: $email !== '' ? new Email($email) : null,
         );
     }

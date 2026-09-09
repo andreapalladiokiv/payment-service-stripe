@@ -5,9 +5,8 @@ declare(strict_types=1);
 use Techork\PaymentService\Common\Contract\DecryptInterface;
 use Techork\PaymentService\Common\Contract\EncryptInterface;
 use Techork\PaymentService\Common\Contract\PaymentInstrument;
-use Techork\PaymentService\Common\ValueObject\BillingAddress;
+use Techork\PaymentService\Common\ValueObject\Customer;
 use Techork\PaymentService\Common\ValueObject\CardBrand;
-use Techork\PaymentService\Common\ValueObject\Country;
 use Techork\PaymentService\Common\ValueObject\CreditCard;
 use Techork\PaymentService\Common\ValueObject\CreditCard\Cvc;
 use Techork\PaymentService\Common\ValueObject\CreditCard\Expiration;
@@ -48,8 +47,8 @@ function stripeRegister(array $options): RegisterPaymentMethod
     return new RegisterPaymentMethod($infrastructure, $options['settings'] ?? new StripeSettings, new VaultCommand(
         gatewayId: GatewayId::generate(),
         instrument: $options['instrument'] ?? Mockery::mock(PaymentInstrument::class),
-        billingAddress: $options['billingAddress'] ?? null,
         clientUniqueId: $options['clientUniqueId'] ?? null,
+        customer: stripeSuiteCustomerFrom($options),
     ), $options['customerReference'] ?? null);
 }
 
@@ -165,7 +164,6 @@ it('throws on payment method instrument', function () {
             new Holder('T'),
             new Cvc,
         ),
-        new BillingAddress('Test', 'User', '1 St', 'NYC', new Country('US'), '10001'),
     );
 
     stripeRegister([
