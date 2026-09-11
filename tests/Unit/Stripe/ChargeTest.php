@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 use Money\Currency;
 use Money\Money;
+use Stripe\ApiRequestor;
+use Stripe\HttpClient\ClientInterface;
+use Stripe\HttpClient\CurlClient;
 use Techork\PaymentService\Common\Contract\DecryptInterface;
 use Techork\PaymentService\Common\Contract\EncryptInterface;
 use Techork\PaymentService\Common\Contract\PaymentInstrument;
@@ -14,6 +17,7 @@ use Techork\PaymentService\Common\ValueObject\CreditCard\Cvc;
 use Techork\PaymentService\Common\ValueObject\CreditCard\Expiration;
 use Techork\PaymentService\Common\ValueObject\CreditCard\Holder;
 use Techork\PaymentService\Common\ValueObject\CreditCard\Number;
+use Techork\PaymentService\Common\ValueObject\Challenge\RedirectChallenge;
 use Techork\PaymentService\Common\ValueObject\ExpiresAt;
 use Techork\PaymentService\Common\ValueObject\HostedPayment;
 use Techork\PaymentService\Common\ValueObject\PaymentInitiation;
@@ -230,4 +234,82 @@ it('refuses to charge a stored card nobody has claimed', function () {
         'instrument' => $bare,
         'referenceResolver' => fakeReferenceResolver('pm_xyz789'),
     ])->payload())->toThrow(UnsupportedInstrument::class, 'names no customer on the "charge" operation');
+});
+
+// ──────────────────────────────────────────────
+//  charge() — the hosted branch on the wire
+//
+//  Nothing here reaches the network: the same static stub
+//  {@see ApiRequestor::setHttpClient()} that CaptureTest uses answers
+//  every call the `StripeClient` built inside `chargeHosted()` makes.
+// ─────────────────────────────────────────────────────────
+
+function stripeChargeFakeApi(array $body, int $status = 200): object
+{
+    $client = new class($body, $status) implements ClientInterface
+    {
+        /** @var list<array{method: string, url: string, headers: array, params: array}> */
+        public array $calls = [];
+
+        public function __construct(private array $body, private int $status) {}
+
+        public function request($method, $absUrl, $headers, $params, $hasFile, $apiMode = 'v1', $maxNetworkRetries = null): array
+        {
+            $this->calls[] = ['method' => $method, 'url' => $absUrl, 'headers' => $headers, 'params' => $params];
+
+            return [json_encode($this->body), $this->status, []];
+        }
+    };
+
+    ApiRequestor::setHttpClient($client);
+
+    return $client;
+}
+
+function stripeChargeSessionBody(): array
+{
+    return [
+        'id' => 'cs_test_hosted_1',
+        'object' => 'checkout_session',
+        'payment_intent' => 'pi_hosted',
+        'url' => 'https://checkout.stripe.com/c/pay/cs_test_hosted_1',
+    ];
+}
+
+afterEach(function () {
+    ApiRequestor::setHttpClient(CurlClient::instance());
+});
+
+/**
+ * The hosted branch creates a Checkout Session — a different Stripe endpoint
+ * from the PaymentIntent branch above it — and Stripe saves the first result
+ * made for any given idempotency key: a repeat with different parameters
+ * errors (`idempotency_error`), one with identical parameters silently
+ * replays the first session. A constant literal here would put every hosted
+ * checkout under the account on a single key, so this pins that the key is
+ * the caller's `clientUniqueId` scoped to the endpoint — the shape
+ * {@see \Techork\PaymentService\Stripe\Concern\StripeRequestParameters::stripeOpts()}
+ * builds for the registration calls — rather than a literal.
+ */
+it('sends the caller idempotency key scoped to the checkout-session endpoint', function () {
+    $api = stripeChargeFakeApi(stripeChargeSessionBody());
+
+    $result = stripeChargeOperation([
+        'instrument' => new HostedPayment(
+            successUrl: 'https://merchant.example/success',
+            cancelUrl: 'https://merchant.example/cancel',
+        ),
+        'money' => new Money(1500, new Currency('USD')),
+        'clientUniqueId' => 'checkout-uuid-9',
+        'settings' => new StripeSettings('sk_test_fake'),
+    ])->charge();
+
+    expect($api->calls)->toHaveCount(1)
+        ->and($api->calls[0]['url'])->toBe('https://api.stripe.com/v1/checkout/sessions')
+        ->and($api->calls[0]['headers'])->toContain('Idempotency-Key: checkout-uuid-9:checkout_session')
+        ->and($result->isRequiresAction())->toBeTrue()
+        ->and($result->reference)->toBe('pi_hosted')
+        ->and($result->challenge)->toBeInstanceOf(RedirectChallenge::class)
+        ->and($result->challenge->transactionId)->toBe('cs_test_hosted_1')
+        ->and($result->challenge->url)->toBe('https://checkout.stripe.com/c/pay/cs_test_hosted_1');
 });

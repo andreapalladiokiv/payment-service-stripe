@@ -270,10 +270,13 @@ final class Charge implements PaymentInstrumentVisitor
             }
 
             // Scoped away from the PaymentIntent branch above: both branches run off the
-            // same `clientUniqueId`, and Stripe pins a key to its first endpoint. The two
-            // are mutually exclusive today, which makes the collision latent rather than
-            // absent. See {@see StripeRequestParameters::stripeOpts}.
-            $session = $stripe->checkout->sessions->create($params, $this->stripeOpts('checkout_session'));
+            // same `clientUniqueId`, and Stripe saves the first result made for any given
+            // key — a repeat with different parameters errors, one with the same silently
+            // replays the first response. The two are mutually exclusive today, which makes
+            // the collision latent rather than absent. The scope suffix keeps the session's
+            // key distinct from the PaymentIntent branch's bare one. See
+            // {@see StripeRequestParameters::stripeOpts}.
+            $session = $stripe->checkout->sessions->create($params, $this->stripeOpts($this->command->clientUniqueId, 'checkout_session'));
 
             // Use the underlying PaymentIntent ID as the gateway reference so
             // the existing payment_intent.succeeded webhook handler can resolve
