@@ -86,6 +86,33 @@ it('returns Skipped when no refunds are attached to the charge', function () {
     expect($handler($event, GatewayId::generate()))->toBe(HandlerOutcome::Skipped);
 });
 
+/**
+ * Stripe's embedded refunds list is newest-first, and charge.refunded fires once per refund —
+ * so the one that fired is data[0]. This is the case where getting it wrong is invisible: the
+ * recorder deduplicates by reference, so re-sending the oldest refund over and over just
+ * drops the event while the refund that actually fired is never booked.
+ */
+it('books the refund that fired, not the oldest one on the charge', function () {
+    $gatewayId = GatewayId::generate();
+    $piId = '01942f6e-1c3a-7b8d-9e4f-'.uniqid();
+
+    $resolver = Mockery::mock(TransactionIdResolver::class);
+    $resolver->shouldReceive('resolvePaymentIntent')->andReturn($piId);
+
+    $recorder = Mockery::mock(RefundProcessingRecorder::class);
+    $recorder->shouldReceive('onRefundProcessed')
+        ->once()
+        ->withArgs(fn (GatewayId $gid, string $pi, string $reference) => $reference === 're_new')
+        ->andReturn(RecorderOutcome::Applied);
+
+    $event = chargeRefundedEvent(refundReference: 're_oldest');
+    $newest = Util::convertToStripeObject(['id' => 're_new', 'object' => 'refund', 'amount' => 500, 'currency' => 'usd'], []);
+    $refunds = $event->data->object->refunds;
+    array_unshift($refunds->data, $newest);
+
+    expect(new ChargeRefundedHandler($resolver, $recorder)($event, $gatewayId))->toBe(HandlerOutcome::Processed);
+});
+
 it('returns Delay when the PaymentIntent reference is unknown', function () {
     $resolver = Mockery::mock(TransactionIdResolver::class);
     $resolver->shouldReceive('resolvePaymentIntent')->andReturnNull();

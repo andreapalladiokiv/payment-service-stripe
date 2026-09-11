@@ -77,7 +77,13 @@ final readonly class ChargeRefundedHandler implements WebhookEventHandler
             return null;
         }
 
-        $latest = end($refunds);
+        // Stripe's refunds list is newest-first (docs.stripe.com/api/refunds/list: "most recent
+        // refunds appearing first"), and charge.refunded fires once per refund created — so the
+        // one that fired is data[0]. `end()` here booked the OLDEST refund of the charge
+        // instead: with two or more partial refunds every event re-sent the first refund's
+        // reference and amount, which the recorder deduplicated away, and the refund that
+        // actually fired was never recorded at all.
+        $latest = reset($refunds);
 
         return is_object($latest) ? $latest : null;
     }
