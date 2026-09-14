@@ -1,0 +1,57 @@
+{
+  "id": "evt_1QkDisputeCreatedBeta",
+  "object": "event",
+  "api_version": "2024-06-20",
+  "created": 1737264000,
+  "data": {
+    "object": {
+      "id": "dp_1QkDisputeCaseBeta",
+      "object": "dispute",
+      "amount": 2500,
+      "balance_transactions": [
+        {
+          "id": "txn_1QkDisputeBetaWithdrawal",
+          "object": "balance_transaction",
+          "amount": -2500,
+          "created": 1737263995,
+          "currency": "usd",
+          "fee": 1500,
+          "net": -4000,
+          "reporting_category": "dispute",
+          "status": "available",
+          "type": "adjustment"
+        }
+      ],
+      "charge": "ch_1QkDisputeChargeAlpha",
+      "created": 1737263990,
+      "currency": "usd",
+      "evidence_details": {
+        "due_by": 1738454399,
+        "has_evidence": false,
+        "past_due": false,
+        "submission_count": 0
+      },
+      "is_charge_refundable": true,
+      "livemode": false,
+      "metadata": {},
+      "payment_intent": "pi_1QkPaymentIntentShared",
+      "payment_method_details": {
+        "card": {
+          "brand": "mastercard",
+          "case_type": "chargeback",
+          "network_reason_code": "4853"
+        },
+        "type": "card"
+      },
+      "reason": "product_not_received",
+      "status": "needs_response"
+    }
+  },
+  "livemode": false,
+  "pending_webhooks": 1,
+  "request": {
+    "id": null,
+    "idempotency_key": null
+  },
+  "type": "charge.dispute.created"
+}

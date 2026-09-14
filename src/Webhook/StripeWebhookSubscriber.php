@@ -5,6 +5,9 @@ declare(strict_types=1);
 namespace Techork\PaymentService\Stripe\Webhook;
 
 use Override;
+use Techork\PaymentService\Stripe\Webhook\Handler\ChargeDisputeClosedHandler;
+use Techork\PaymentService\Stripe\Webhook\Handler\ChargeDisputeCreatedHandler;
+use Techork\PaymentService\Stripe\Webhook\Handler\ChargeDisputeUpdatedHandler;
 use Techork\PaymentService\Stripe\Webhook\Handler\ChargeRefundedHandler;
 use Techork\PaymentService\Stripe\Webhook\Handler\ChargeRefundUpdatedHandler;
 use Techork\PaymentService\Stripe\Webhook\Handler\ChargeUpdatedHandler;
@@ -32,6 +35,9 @@ final readonly class StripeWebhookSubscriber implements WebhookSubscriber
         private ChargeRefundUpdatedHandler $chargeRefundUpdated,
         private PaymentMethodAttachedHandler $paymentMethodAttached,
         private PaymentMethodDetachedHandler $paymentMethodDetached,
+        private ChargeDisputeCreatedHandler $chargeDisputeCreated,
+        private ChargeDisputeUpdatedHandler $chargeDisputeUpdated,
+        private ChargeDisputeClosedHandler $chargeDisputeClosed,
     ) {}
 
     #[Override]
@@ -47,5 +53,14 @@ final readonly class StripeWebhookSubscriber implements WebhookSubscriber
         $handlers->register(self::KIND, 'charge.refund.updated', $this->chargeRefundUpdated);
         $handlers->register(self::KIND, 'payment_method.attached', $this->paymentMethodAttached);
         $handlers->register(self::KIND, 'payment_method.detached', $this->paymentMethodDetached);
+
+        // One Stripe event type per handler, and three event types rather than one because Stripe
+        // publishes a case three times: when it is raised, whenever anything about it moves, and
+        // when it ends. The first two are the same report of the same object; the third is the only
+        // one that can carry an outcome, and the handler is the only one of the three that can be
+        // reached with no payment reference in it.
+        $handlers->register(self::KIND, 'charge.dispute.created', $this->chargeDisputeCreated);
+        $handlers->register(self::KIND, 'charge.dispute.updated', $this->chargeDisputeUpdated);
+        $handlers->register(self::KIND, 'charge.dispute.closed', $this->chargeDisputeClosed);
     }
 }

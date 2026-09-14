@@ -13,6 +13,7 @@ use Techork\PaymentService\Gateway\Webhook\Contract\StoredWebhookCall;
 use Techork\PaymentService\Gateway\Webhook\Contract\TransactionIdResolver;
 use Techork\PaymentService\Gateway\Webhook\HandlerRegistry;
 use Techork\PaymentService\Gateway\Webhook\Recorder\GatewayCancellationRecorder;
+use Techork\PaymentService\Gateway\Webhook\Recorder\GatewayDisputeRecorder;
 use Techork\PaymentService\Gateway\Webhook\Recorder\GatewayFailureRecorder;
 use Techork\PaymentService\Gateway\Webhook\Recorder\GatewayFeeRecorder;
 use Techork\PaymentService\Gateway\Webhook\Recorder\GatewayPaymentMethodRecorder;
@@ -23,6 +24,9 @@ use Techork\PaymentService\Gateway\Webhook\VerifierRegistry;
 use Techork\PaymentService\Gateway\Webhook\WebhookRouter;
 use Techork\PaymentService\Stripe\StripeGateway;
 use Techork\PaymentService\Stripe\Webhook\EventParser;
+use Techork\PaymentService\Stripe\Webhook\Handler\ChargeDisputeClosedHandler;
+use Techork\PaymentService\Stripe\Webhook\Handler\ChargeDisputeCreatedHandler;
+use Techork\PaymentService\Stripe\Webhook\Handler\ChargeDisputeUpdatedHandler;
 use Techork\PaymentService\Stripe\Webhook\Handler\ChargeRefundedHandler;
 use Techork\PaymentService\Stripe\Webhook\Handler\ChargeRefundUpdatedHandler;
 use Techork\PaymentService\Stripe\Webhook\Handler\ChargeUpdatedHandler;
@@ -36,7 +40,7 @@ use Techork\PaymentService\Stripe\Webhook\StripeWebhookSubscriber;
 
 /**
  * {@see StripeWebhookSubscriber} is the only place the gateway kind, the
- * verifier, the parser and eight handlers meet, and it was unexecuted. The real
+ * verifier, the parser and eleven handlers meet, and it was unexecuted. The real
  * {@see VerifierRegistry}, {@see HandlerRegistry} and {@see WebhookRouter} are
  * driven here rather than doubles, because every failure this class can have
  * lives BETWEEN the classes: a kind the registry is keyed by that the gateway
@@ -106,7 +110,7 @@ function stripeWiringRequest(array $payload, string $secret): ServerRequestInter
 }
 
 /**
- * The subscriber with all eight handlers real and only the persistence boundary
+ * The subscriber with all eleven handlers real and only the persistence boundary
  * mocked. Constructing them is itself part of what is pinned: the subscriber
  * names each by concrete type, so a handler whose constructor changed shape
  * fails here rather than at container-resolution time in production.
@@ -114,8 +118,10 @@ function stripeWiringRequest(array $payload, string $secret): ServerRequestInter
 function stripeWiringSubscriber(
     ?TransactionIdResolver $resolver = null,
     ?GatewayCancellationRecorder $cancellation = null,
+    ?GatewayDisputeRecorder $disputes = null,
 ): StripeWebhookSubscriber {
     $resolver ??= Mockery::mock(TransactionIdResolver::class);
+    $disputes ??= Mockery::mock(GatewayDisputeRecorder::class);
 
     return new StripeWebhookSubscriber(
         new SignatureVerifier,
@@ -136,6 +142,9 @@ function stripeWiringSubscriber(
         ),
         new PaymentMethodAttachedHandler(Mockery::mock(GatewayPaymentMethodRecorder::class)),
         new PaymentMethodDetachedHandler(Mockery::mock(InstrumentReferenceEraser::class)),
+        new ChargeDisputeCreatedHandler($resolver, $disputes),
+        new ChargeDisputeUpdatedHandler($resolver, $disputes),
+        new ChargeDisputeClosedHandler($resolver, $disputes),
     );
 }
 
@@ -202,6 +211,13 @@ it('points each subscribed Stripe event type at the handler written for it', fun
     'charge.refund.updated' => ['charge.refund.updated', ChargeRefundUpdatedHandler::class],
     'payment_method.attached' => ['payment_method.attached', PaymentMethodAttachedHandler::class],
     'payment_method.detached' => ['payment_method.detached', PaymentMethodDetachedHandler::class],
+    // The three dispute events are one lifecycle and three distinct wire strings. `created` and
+    // `updated` carry the same dispute object and are told apart only by the type, so a row that
+    // pointed the wrong way would file every update as a first sighting and every first sighting
+    // twice.
+    'charge.dispute.created' => ['charge.dispute.created', ChargeDisputeCreatedHandler::class],
+    'charge.dispute.updated' => ['charge.dispute.updated', ChargeDisputeUpdatedHandler::class],
+    'charge.dispute.closed' => ['charge.dispute.closed', ChargeDisputeClosedHandler::class],
 ]);
 
 it('registers no handler for a Stripe event type we do not act on', function (string $eventType) {
@@ -215,6 +231,8 @@ it('registers no handler for a Stripe event type we do not act on', function (st
     'unsubscribed lifecycle event' => 'payment_intent.created',
     'a plausible near-miss spelling' => 'payment_intent.cancelled',
     'the British refund spelling' => 'charge.refund_updated',
+    'the dispute event without its charge' => 'dispute.created',
+    'the pluralised dispute spelling' => 'charge.disputes.created',
     'no type at all' => '',
 ]);
 

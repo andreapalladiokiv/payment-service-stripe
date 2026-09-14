@@ -1,0 +1,69 @@
+{
+  "id": "evt_1QkDisputeClosedAlpha",
+  "object": "event",
+  "api_version": "2024-06-20",
+  "created": 1738100000,
+  "data": {
+    "object": {
+      "id": "dp_1QkDisputeCaseAlpha",
+      "object": "dispute",
+      "amount": 1500,
+      "balance_transactions": [
+        {
+          "id": "txn_1QkDisputeAlphaWithdrawal",
+          "object": "balance_transaction",
+          "amount": -1500,
+          "created": 1737004795,
+          "currency": "usd",
+          "fee": 1500,
+          "net": -3000,
+          "reporting_category": "dispute",
+          "status": "available",
+          "type": "adjustment"
+        },
+        {
+          "id": "txn_1QkDisputeAlphaReinstatement",
+          "object": "balance_transaction",
+          "amount": 1500,
+          "created": 1738099995,
+          "currency": "usd",
+          "fee": 0,
+          "net": 1500,
+          "reporting_category": "dispute_reversal",
+          "status": "available",
+          "type": "adjustment"
+        }
+      ],
+      "charge": "ch_1QkDisputeChargeAlpha",
+      "created": 1737004790,
+      "currency": "usd",
+      "evidence_details": {
+        "due_by": 1738195199,
+        "has_evidence": true,
+        "past_due": false,
+        "submission_count": 1
+      },
+      "is_charge_refundable": true,
+      "livemode": false,
+      "metadata": {},
+      "payment_intent": "pi_1QkPaymentIntentShared",
+      "payment_method_details": {
+        "card": {
+          "brand": "visa",
+          "case_type": "chargeback",
+          "network_reason_code": "10.4"
+        },
+        "type": "card"
+      },
+      "reason": "fraudulent",
+      "status": "won"
+    }
+  },
+  "livemode": false,
+  "pending_webhooks": 1,
+  "request": {
+    "id": null,
+    "idempotency_key": null
+  },
+  "type": "charge.dispute.closed"
+}

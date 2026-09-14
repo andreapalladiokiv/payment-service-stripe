@@ -31,8 +31,24 @@ use Techork\PaymentService\Gateway\Command\IssueCardCommand;
 use Techork\PaymentService\Gateway\Command\TerminateCardCommand;
 use Techork\PaymentService\Gateway\Command\UpdateCardCommand;
 use Techork\PaymentService\Gateway\Contract\VirtualCardResult;
+use Techork\PaymentService\Gateway\Contract\DisputeCaseReading;
+use Techork\PaymentService\Gateway\Command\DisputeCaseQuery;
+use Techork\PaymentService\Gateway\Command\DisputeConcessionCommand;
+use Techork\PaymentService\Gateway\Command\DisputeEvidenceCommand;
+use Techork\PaymentService\Gateway\Role\ConcedesDisputes;
+use Techork\PaymentService\Gateway\Role\ReadsDisputeCases;
+use Techork\PaymentService\Gateway\Role\SubmitsDisputeEvidence;
+use Techork\PaymentService\Stripe\Dispute\DisputeCaseRead;
+use Techork\PaymentService\Stripe\Dispute\DisputeConcession;
+use Techork\PaymentService\Stripe\Dispute\DisputeEvidenceSubmission;
 
-final class StripeGateway implements Gateway
+/**
+ * The three dispute roles are separate from {@see Gateway} on purpose: a provider that acquires has
+ * no dispute surface from that fact alone, and the composite would have made every driver in the
+ * tree write methods for calls it can never receive. Stripe has all three, so this driver declares
+ * all three — and a driver with none of them simply does not.
+ */
+final class StripeGateway implements Gateway, SubmitsDisputeEvidence, ConcedesDisputes, ReadsDisputeCases
 {
     use HoldsInfrastructure;
 
@@ -360,6 +376,35 @@ final class StripeGateway implements Gateway
     private function settings(): StripeSettings
     {
         return new StripeSettings($this->apiKey, $this->authenticationUrl, $this->returnUrl);
+    }
+
+    /**
+     * Files a case's evidence, staged or sent. See {@see DisputeEvidenceSubmission} for the
+     * `submit` flag and for why the two calls are one operation.
+     */
+    #[Override]
+    public function submitEvidence(DisputeEvidenceCommand $command): GatewayResult
+    {
+        return new DisputeEvidenceSubmission($this->settings(), $command)->submit();
+    }
+
+    /**
+     * Concedes a case, irreversibly. See {@see DisputeConcession} for the partial-amount refusal
+     * and for the status a successful close has to report before this answers success.
+     */
+    #[Override]
+    public function concede(DisputeConcessionCommand $command): GatewayResult
+    {
+        return new DisputeConcession($this->settings(), $command)->concede();
+    }
+
+    /**
+     * What Stripe says is still open on a case. See {@see DisputeCaseRead}.
+     */
+    #[Override]
+    public function readDisputeCase(DisputeCaseQuery $query): DisputeCaseReading
+    {
+        return new DisputeCaseRead($this->settings(), $query)->read();
     }
 
 }

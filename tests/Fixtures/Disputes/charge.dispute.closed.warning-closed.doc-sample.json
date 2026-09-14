@@ -1,0 +1,57 @@
+{
+  "id": "evt_1QkDisputeClosedDelta",
+  "object": "event",
+  "api_version": "2024-06-20",
+  "created": 1747699200,
+  "data": {
+    "object": {
+      "id": "dp_1QkDisputeCaseDelta",
+      "object": "dispute",
+      "amount": 4200,
+      "balance_transactions": [
+        {
+          "id": "txn_1QkDisputeDeltaWithdrawal",
+          "object": "balance_transaction",
+          "amount": -4200,
+          "created": 1737299995,
+          "currency": "usd",
+          "fee": 1500,
+          "net": -5700,
+          "reporting_category": "dispute",
+          "status": "available",
+          "type": "adjustment"
+        }
+      ],
+      "charge": "ch_1QkDisputeChargeDelta",
+      "created": 1737299990,
+      "currency": "usd",
+      "evidence_details": {
+        "due_by": 1738583999,
+        "has_evidence": false,
+        "past_due": true,
+        "submission_count": 0
+      },
+      "is_charge_refundable": true,
+      "livemode": false,
+      "metadata": {},
+      "payment_intent": "pi_1QkPaymentIntentInquiry",
+      "payment_method_details": {
+        "card": {
+          "brand": "discover",
+          "case_type": "inquiry",
+          "network_reason_code": "A01"
+        },
+        "type": "card"
+      },
+      "reason": "product_not_received",
+      "status": "warning_closed"
+    }
+  },
+  "livemode": false,
+  "pending_webhooks": 1,
+  "request": {
+    "id": null,
+    "idempotency_key": null
+  },
+  "type": "charge.dispute.closed"
+}
