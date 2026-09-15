@@ -10,7 +10,6 @@ use Stripe\HttpClient\CurlClient;
 use Techork\PaymentService\Common\Contract\DecryptInterface;
 use Techork\PaymentService\Common\Contract\EncryptInterface;
 use Techork\PaymentService\Common\ValueObject\BillingAddress;
-use Techork\PaymentService\Common\ValueObject\Customer;
 use Techork\PaymentService\Common\ValueObject\CardBrand;
 use Techork\PaymentService\Common\ValueObject\Challenge\SdkChallenge;
 use Techork\PaymentService\Common\ValueObject\Country;
@@ -19,6 +18,7 @@ use Techork\PaymentService\Common\ValueObject\CreditCard\Cvc;
 use Techork\PaymentService\Common\ValueObject\CreditCard\Expiration;
 use Techork\PaymentService\Common\ValueObject\CreditCard\Holder;
 use Techork\PaymentService\Common\ValueObject\CreditCard\Number;
+use Techork\PaymentService\Common\ValueObject\Customer;
 use Techork\PaymentService\Common\ValueObject\Email;
 use Techork\PaymentService\Common\ValueObject\PaymentInitiation;
 use Techork\PaymentService\Common\ValueObject\PaymentMethod;
@@ -32,8 +32,8 @@ use Techork\PaymentService\Gateway\Command\TerminateCardCommand;
 use Techork\PaymentService\Gateway\Command\UpdateCardCommand;
 use Techork\PaymentService\Gateway\Command\VaultCommand;
 use Techork\PaymentService\Gateway\Contract\AuthorizationResult;
-use Techork\PaymentService\Gateway\Contract\GatewayCustomerRepository;
 use Techork\PaymentService\Gateway\Contract\GatewayCredential;
+use Techork\PaymentService\Gateway\Contract\GatewayCustomerRepository;
 use Techork\PaymentService\Gateway\Contract\GatewayInstrumentRepository;
 use Techork\PaymentService\Gateway\Exception\RegistrationNeedsCustomer;
 use Techork\PaymentService\Gateway\Exception\UnsupportedByGateway;
@@ -456,7 +456,7 @@ it('refuses card issuing with the marker that stops it becoming a decline', func
     expect($thrown)->toBeInstanceOf(UnsupportedByGateway::class)
         ->and($thrown)->toBeInstanceOf(UnsupportedOperation::class);
 })->with([
-    'issueVirtualCard' => [fn (StripeGateway $g) => $g->issueVirtualCard(new IssueCardCommand(
+    'issueVirtualCard' => [fn (StripeGateway $g) => $g->issueVirtualCard(IssueCardCommand::saleFunded(
         gatewayId: GatewayId::generate(),
         transactionReference: 'pi_1',
         amountLimit: new Money(1000, new Currency('USD')),
