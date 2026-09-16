@@ -8,12 +8,14 @@ use Techork\PaymentService\Common\Contract\DecryptInterface;
 use Techork\PaymentService\Common\Contract\EncryptInterface;
 use Techork\PaymentService\Common\Contract\PaymentInstrument;
 use Techork\PaymentService\Common\ValueObject\Cash;
+use Techork\PaymentService\Common\ValueObject\Challenge\SdkChallenge;
 use Techork\PaymentService\Common\ValueObject\CreditCard;
 use Techork\PaymentService\Common\ValueObject\CreditCard\Cvc;
 use Techork\PaymentService\Common\ValueObject\CreditCard\Expiration;
 use Techork\PaymentService\Common\ValueObject\CreditCard\Holder;
 use Techork\PaymentService\Common\ValueObject\CreditCard\Number;
 use Techork\PaymentService\Common\ValueObject\ExpiresAt;
+use Techork\PaymentService\Common\ValueObject\HostedPayment;
 use Techork\PaymentService\Common\ValueObject\PaymentInitiation;
 use Techork\PaymentService\Common\ValueObject\PaymentMethod;
 use Techork\PaymentService\Common\ValueObject\PaymentMethodId;
@@ -356,4 +358,84 @@ it('refuses to authorize a stored card nobody has claimed', function () {
         'instrument' => $bare,
         'referenceResolver' => fakeReferenceResolver('pm_xyz789'),
     ])->payload())->toThrow(UnsupportedInstrument::class, 'names no customer on the "authorize" operation');
+});
+
+// ─────────────────────────────────────────────────────────
+//  A payment the payer's own browser completes
+//
+//  Stripe's Express Checkout Element collects the wallet on our page and confirms the payment
+//  itself, against the intent's client secret. So this operation's job for a hosted instrument is
+//  to open an intent and stop: no instrument, no `confirm`, and an answer that says the payment is
+//  waiting for somebody rather than that it went nowhere.
+// ─────────────────────────────────────────────────────────
+
+it('builds deferred data for a hosted payment, naming no instrument', function () {
+    $data = stripeAuthorizeOperation([
+        'money' => new Money(5000, new Currency('USD')),
+        'instrument' => new HostedPayment(
+            successUrl: 'https://pay.example.com/checkout/abc',
+            cancelUrl: 'https://pay.example.com/checkout/abc',
+        ),
+        'gateway' => fakeCredential(),
+    ])->payload();
+
+    expect($data['deferred_return_url'])->toBe('https://pay.example.com/checkout/abc')
+        ->and($data['amount'])->toBe(5000)
+        ->and($data['currency'])->toBe('usd')
+        ->and($data)->not->toHaveKey('payment_method_data')
+        ->and($data)->not->toHaveKey('payment_method');
+});
+
+it('opens a hosted payment unconfirmed and hands back a handle for the payer to confirm', function () {
+    $client = new class implements ClientInterface
+    {
+        /** @var list<array<string, mixed>> */
+        public array $params = [];
+
+        public function request($method, $absUrl, $headers, $params, $hasFile, $apiMode = 'v1', $maxNetworkRetries = null): array
+        {
+            $this->params[] = $params;
+
+            return [json_encode([
+                'id' => 'pi_deferred',
+                'object' => 'payment_intent',
+                // What an intent with nothing attached to it answers. The mapping the other
+                // branch uses would call this an outcome nobody can act on; here it is the
+                // expected one.
+                'status' => 'requires_payment_method',
+                'amount' => 5000,
+                'currency' => 'usd',
+            ]), 200, []];
+        }
+    };
+
+    ApiRequestor::setHttpClient($client);
+
+    $result = stripeAuthorizeOperation([
+        'money' => new Money(5000, new Currency('USD')),
+        'instrument' => new HostedPayment(
+            successUrl: 'https://pay.example.com/checkout/abc',
+            cancelUrl: 'https://pay.example.com/checkout/abc',
+        ),
+        'gateway' => fakeCredential(),
+    ])->authorize();
+
+    $sent = $client->params[0];
+
+    expect($sent)->not->toHaveKey('confirm')
+        ->and($sent)->not->toHaveKey('payment_method')
+        ->and($sent)->not->toHaveKey('payment_method_data')
+        ->and($sent['capture_method'])->toBe('manual')
+        ->and($sent['return_url'])->toBe('https://pay.example.com/checkout/abc')
+        // `'true'`, not `true`: this is what the SDK put on the wire, and it encodes booleans as
+        // strings. The operation passes a real boolean.
+        ->and($sent['automatic_payment_methods'])->toBe(['enabled' => 'true', 'allow_redirects' => 'always']);
+
+    // Not a success, and that is the convention rather than a defect: `requiresAction()` says the
+    // money has not moved and somebody still has to act. A caller reads the challenge, not this.
+    expect($result->success)->toBeFalse()
+        ->and($result->reference)->toBe('pi_deferred')
+        ->and($result->challenge)->toBeInstanceOf(SdkChallenge::class)
+        ->and($result->challenge->paymentReference)->toBe('pi_deferred')
+        ->and($result->metadata['opening_transaction_reference'])->toBe('pi_deferred');
 });
