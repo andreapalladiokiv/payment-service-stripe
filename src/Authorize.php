@@ -182,10 +182,10 @@ final class Authorize implements PaymentInstrumentVisitor
      * confirms the payment itself, against the intent's client secret — so what this operation has
      * to produce is an intent that exists, holds the amount open and is waiting for exactly that.
      *
-     * The return url comes off the instrument rather than off the account's settings, because it
-     * belongs to this payment: the payer is on one checkout's page and that is the page they come
-     * back to. The account-wide one in {@see StripeSettings} stays what it is — a default for the
-     * flows that have no page of their own.
+     * The value on the key is the instrument's return address. It does NOT reach Stripe — see
+     * {@see deferToThePayer()}, which explains why a create that does not confirm may not carry one
+     * — and it is kept here because it is the truest thing to mark this payload with: the page that
+     * payer comes back to.
      *
      * @return array<string, string>
      */
@@ -312,12 +312,21 @@ final class Authorize implements PaymentInstrumentVisitor
      */
     private function deferToThePayer(StripeClient $stripe, array $data, array $opts): AuthorizationResult
     {
+        // No `return_url`, and that is Stripe's rule rather than a choice: "The parameter
+        // `return_url` cannot be passed when creating a PaymentIntent unless `confirm` is set to
+        // true." This operation exists precisely to not confirm, so sending one fails the whole
+        // create — which comes back as a declined payment and tells the payer their card was
+        // refused, for a parameter they have nothing to do with.
+        //
+        // Nothing is lost by leaving it out. A return address is a confirmation-time fact, and
+        // whoever confirms supplies it: the payer's browser passes it to `confirmPayment` alongside
+        // the client secret. The instrument still carries it, because it is still where that payer
+        // comes back to — it is simply not this call's to state.
         $params = [
             'amount' => $data['amount'],
             'currency' => $data['currency'],
             'capture_method' => 'manual',
             'automatic_payment_methods' => ['enabled' => true, 'allow_redirects' => 'always'],
-            'return_url' => $data[self::DEFERRED_TO_THE_PAYER],
         ];
 
         foreach (['customer', 'statement_descriptor_suffix', 'description'] as $optional) {

@@ -425,8 +425,13 @@ it('opens a hosted payment unconfirmed and hands back a handle for the payer to 
     expect($sent)->not->toHaveKey('confirm')
         ->and($sent)->not->toHaveKey('payment_method')
         ->and($sent)->not->toHaveKey('payment_method_data')
+        // And no return url. This asserted the opposite until Stripe refused it for real: "The
+        // parameter `return_url` cannot be passed when creating a PaymentIntent unless `confirm` is
+        // set to true." The stub client accepts any body, so the wrong expectation passed here and
+        // failed on the first live payment — as a 402 telling a payer their card was declined. The
+        // return address is the confirming party's to supply, and that is the browser.
+        ->and($sent)->not->toHaveKey('return_url')
         ->and($sent['capture_method'])->toBe('manual')
-        ->and($sent['return_url'])->toBe('https://pay.example.com/checkout/abc')
         // `'true'`, not `true`: this is what the SDK put on the wire, and it encodes booleans as
         // strings. The operation passes a real boolean.
         ->and($sent['automatic_payment_methods'])->toBe(['enabled' => 'true', 'allow_redirects' => 'always']);
